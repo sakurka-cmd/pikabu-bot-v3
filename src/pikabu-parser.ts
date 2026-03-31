@@ -126,6 +126,19 @@ function extractIdFromUrl(url: string): string {
   return match ? match[1] : '';
 }
 
+// Decode unicode escape sequences like \u041f\u0440\u0438\u0432\u0435\u0442
+function decodeUnicodeEscapes(str: string): string {
+  if (!str) return str;
+  try {
+    // Handle \uXXXX sequences
+    return str.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => 
+      String.fromCharCode(parseInt(hex, 16))
+    );
+  } catch {
+    return str;
+  }
+}
+
 // ===== MAIN PARSING FUNCTION =====
 
 export async function parsePikabu(tag?: string): Promise<ParseResult> {
@@ -143,6 +156,7 @@ export async function parsePikabu(tag?: string): Promise<ParseResult> {
         'User-Agent': USER_AGENT,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept-Charset': 'utf-8',
         'Cache-Control': 'no-cache',
       },
     });
@@ -151,25 +165,33 @@ export async function parsePikabu(tag?: string): Promise<ParseResult> {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
+    // Get raw text and ensure proper UTF-8 handling
     const html = await response.text();
     
-    // Debug: check encoding by looking for specific Russian characters
-    const hasRussianChars = /[а-яё]/i.test(html);
-    console.log(`[Parser] HTML length: ${html.length}, has Russian chars: ${hasRussianChars}`);
+    // Debug: check encoding
+    const hasRussianChars = /[а-яёА-ЯЁ]/.test(html);
+    const hasUnicodeEscapes = /\\u[0-9a-fA-F]{4}/.test(html);
+    console.log(`[Parser] HTML length: ${html.length}, Russian chars: ${hasRussianChars}, Unicode escapes: ${hasUnicodeEscapes}`);
     
-    const $ = cheerio.load(html, { decodeEntities: true, xmlMode: false });
+    // Use decodeEntities: false to preserve original encoding
+    const $ = cheerio.load(html, { 
+      decodeEntities: false,
+      xmlMode: false,
+      lowerCaseTags: false,
+      lowerCaseAttributeNames: false
+    });
+    
     const posts: Post[] = [];
 
     // First try to parse from JSON data (more reliable for tags)
-    const jsonPosts = parseFromJsonData($);
+    const jsonPosts = parseFromJsonData($, html);
     if (jsonPosts.length > 0) {
       console.log(`[Parser] Using JSON data: found ${jsonPosts.length} posts`);
       posts.push(...jsonPosts.filter(p => p.images.length > 0));
     } else {
-      // Fallback to HTML parsing - try multiple selectors
+      // Fallback to HTML parsing
       let storyElements = $('article.story, .story').toArray();
       
-      // Try alternative selectors if nothing found
       if (storyElements.length === 0) {
         storyElements = $('article').toArray();
       }
@@ -256,19 +278,14 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
     });
   }
   
-  console.log(`[Parser] Story ${storyId} parsed tags: [${tags.slice(0, 5).join(', ')}]`);
+  console.log(`[Parser] Story ${storyId} tags: [${tags.slice(0, 5).join(', ')}]`);
 
-  // Images - only content images, skip avatars
+  // Images - only content images
   const images: string[] = [];
-
-  // IMPORTANT: Only look for images in the story content area, not header/footer
   const $contentArea = $story.find('.story__content, .story-block, .story__body, [class*="content"]').first();
-  
-  // Method 1: img tags in content area only
   const $searchArea = $contentArea.length > 0 ? $contentArea : $story;
   
   $searchArea.find('img').each((_, imgEl) => {
-    // Skip if parent is clearly an avatar container
     const $img = $(imgEl);
     const parentClass = $img.parent().attr('class') || '';
     const grandparentClass = $img.parent().parent().attr('class') || '';
@@ -279,7 +296,6 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
         parentClass.toLowerCase().includes('community') ||
         grandparentClass.toLowerCase().includes('avatar') ||
         grandparentClass.toLowerCase().includes('user')) {
-      console.log(`[Parser] Skipping avatar image: ${parentClass}`);
       return;
     }
     
@@ -292,7 +308,7 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
     }
   });
 
-  // Method 2: data-images attribute (usually content images)
+  // Method 2: data-images attribute
   const dataImages = $story.attr('data-images') || $story.find('[data-images]').attr('data-images');
   if (dataImages) {
     try {
@@ -303,7 +319,7 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
     } catch { }
   }
   
-  // Method 3: background-image in style (only in content area)
+  // Method 3: background-image
   $searchArea.find('[style*="background-image"]').each((_, el) => {
     const style = $(el).attr('style') || '';
     const match = style.match(/url\(['"]?([^'")\s]+)['"]?\)/);
@@ -345,14 +361,14 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
 
   return {
     id: storyId,
-    title,
+    title: decodeUnicodeEscapes(title),
     link: link.startsWith('http') ? link : `https://pikabu.ru${link}`,
-    tags,
+    tags: tags.map(decodeUnicodeEscapes),
     images: [...new Set(images)],
     rating,
-    author: author.toLowerCase().replace('@', ''),
-    authorName,
-    bodyPreview: bodyPreview.slice(0, 500) || undefined,
+    author: decodeUnicodeEscapes(author.toLowerCase().replace('@', '')),
+    authorName: authorName ? decodeUnicodeEscapes(authorName) : undefined,
+    bodyPreview: bodyPreview ? decodeUnicodeEscapes(bodyPreview.slice(0, 500)) : undefined,
     commentsCount,
     publishedAt: datetime,
     parsedAt: new Date().toISOString(),
@@ -361,53 +377,82 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
 
 // ===== JSON PARSING =====
 
-function parseFromJsonData($: cheerio.CheerioAPI): Post[] {
+function parseFromJsonData($: cheerio.CheerioAPI, rawHtml: string): Post[] {
   const posts: Post[] = [];
 
+  // Try to find JSON data directly in raw HTML (more reliable)
+  // Look for window.__INITIAL_STATE__ or similar patterns
+  const statePatterns = [
+    /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*;\s*<\/script>/,
+    /__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*;/,
+    /"stories"\s*:\s*(\[[\s\S]*?\])\s*[,}]/,
+    /stories\s*:\s*(\[[\s\S]*?\])\s*[,}]/
+  ];
+  
+  for (const pattern of statePatterns) {
+    const matches = rawHtml.match(pattern);
+    if (matches) {
+      try {
+        let jsonStr = matches[1];
+        
+        // The JSON might contain unicode escapes - try to parse it directly
+        // Node's JSON.parse handles \uXXXX automatically
+        const data = JSON.parse(jsonStr);
+        
+        let stories: any[] = [];
+        
+        if (Array.isArray(data)) {
+          stories = data;
+        } else if (data.stories && Array.isArray(data.stories)) {
+          stories = data.stories;
+        }
+        
+        if (stories.length > 0) {
+          console.log(`[Parser] Found ${stories.length} stories in JSON (pattern: ${pattern.source.slice(0, 30)}...)`);
+          
+          for (const story of stories) {
+            const post = parseStoryObject(story);
+            if (post) {
+              posts.push(post);
+            }
+          }
+          
+          if (posts.length > 0) return posts;
+        }
+      } catch (e) {
+        console.error('[Parser] JSON parse error:', e);
+      }
+    }
+  }
+
+  // Fallback: scan script tags
   $('script').each((_, scriptEl) => {
     const content = $(scriptEl).html() || '';
     if (!content || content.length < 100) return;
 
-    // Try different JSON patterns
-    let matches = content.match(/"stories"\s*:\s*(\[[\s\S]*?\])\s*[,}]/);
-    
-    // Alternative pattern without quotes
-    if (!matches) {
-      matches = content.match(/stories\s*:\s*(\[[\s\S]*?\])\s*[,}]/);
-    }
-    
-    // Pattern for __INITIAL_STATE__
-    if (!matches) {
-      const stateMatch = content.match(/__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*;?\s*<\/script>/);
-      if (stateMatch) {
-        try {
-          const state = JSON.parse(stateMatch[1]);
-          if (state.stories && Array.isArray(state.stories)) {
-            console.log(`[Parser] Found __INITIAL_STATE__ with ${state.stories.length} stories`);
-            for (const story of state.stories) {
-              const post = parseStoryObject(story);
-              if (post) posts.push(post);
+    try {
+      // Try to extract stories from various JSON structures
+      const patterns = [
+        /"stories"\s*:\s*(\[[\s\S]*?\])\s*[,}]/,
+        /stories\s*:\s*(\[[\s\S]*?\])\s*[,}]/
+      ];
+      
+      for (const pattern of patterns) {
+        const matches = content.match(pattern);
+        if (matches) {
+          const stories = JSON.parse(matches[1]);
+          console.log(`[Parser] Found ${stories.length} stories in script tag`);
+          
+          for (const story of stories) {
+            const post = parseStoryObject(story);
+            if (post) {
+              posts.push(post);
             }
           }
-        } catch (e) {}
-        return;
-      }
-    }
-    
-    if (matches) {
-      try {
-        const stories = JSON.parse(matches[1]);
-        console.log(`[Parser] Found ${stories.length} stories in JSON`);
-        for (const story of stories) {
-          const post = parseStoryObject(story);
-          if (post) {
-            console.log(`[Parser] JSON story ${post.id} tags: [${post.tags.slice(0, 3).join(', ')}...]`);
-            posts.push(post);
-          }
         }
-      } catch (e) {
-        console.error('[Parser] Error parsing JSON stories:', e);
       }
+    } catch (e) {
+      // Ignore parse errors in individual scripts
     }
   });
 
@@ -456,14 +501,20 @@ function parseStoryObject(obj: any): Post | null {
   // Extract tags
   let tags: string[] = [];
   if (obj.tags && Array.isArray(obj.tags)) {
-    tags = obj.tags.map((t: any) =>
-      typeof t === 'string' ? t.toLowerCase() : (t.name || t.tag || t.title || '').toLowerCase()
-    ).filter((t: string) => t && t.length > 0);
+    tags = obj.tags.map((t: any) => {
+      const tag = typeof t === 'string' ? t : (t.name || t.tag || t.title || '');
+      return tag.toLowerCase();
+    }).filter((t: string) => t && t.length > 0);
   }
+
+  // Title is already properly decoded by JSON.parse
+  const title = obj.title || 'Без названия';
+  
+  console.log(`[Parser] Parsed story ${obj.id}: "${title.slice(0, 50)}..." tags: [${tags.slice(0, 3).join(', ')}]`);
 
   return {
     id: String(obj.id),
-    title: obj.title || 'Без названия',
+    title,
     link: `https://pikabu.ru/story/${obj.story_link || obj.story_link_id || obj.id}`,
     tags,
     images: images.map(normalizeImageUrl),
