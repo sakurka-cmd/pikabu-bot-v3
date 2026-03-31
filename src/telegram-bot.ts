@@ -1025,8 +1025,7 @@ export async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; 
 
 async function sendFullPost(bot: TelegramBot, chatId: number, post: ParserPost, setName?: string): Promise<void> {
   const tags = post.tags.slice(0, 10).map(t => `#${t}`).join(' ');
-  const header = setName ? `📦 ${setName}\n\n` : '';
-  const caption = `${header}<b>${escapeHtml(post.title)}</b>\n\n${tags}\n\n🔗 <a href="${post.link}">Open</a> | 👤 @${post.author} | ⭐ ${post.rating}`;
+  const caption = `<b>${escapeHtml(post.title)}</b>\n\n${tags}\n\n<a href="${post.link}">Ссылка на пост</a>`;
 
   if (post.images.length === 1) {
     await bot.sendPhoto(chatId, post.images[0], { caption, parse_mode: 'HTML' });
@@ -1042,7 +1041,7 @@ async function sendFullPost(bot: TelegramBot, chatId: number, post: ParserPost, 
 
 async function sendPreviewPost(bot: TelegramBot, chatId: number, post: ParserPost): Promise<void> {
   const preview = post.bodyPreview?.slice(0, 200) || '';
-  const caption = `<b>${escapeHtml(post.title)}</b>\n\n${preview}${preview.length >= 200 ? '...' : ''}\n\n👤 @${post.author} | ⭐ ${post.rating} | 💬 ${post.commentsCount}\n\n🔗 <a href="${post.link}">Open</a>`;
+  const caption = `<b>${escapeHtml(post.title)}</b>\n\n${preview}${preview.length >= 200 ? '...' : ''}\n\n<a href="${post.link}">Ссылка на пост</a>`;
 
   const image = post.images[0];
 
