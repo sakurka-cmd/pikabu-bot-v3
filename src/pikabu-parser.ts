@@ -1,5 +1,5 @@
 /**
- * Pikabu Parser - Fixed for proper encoding
+ * Pikabu Parser - Fixed encoding
  */
 
 import * as cheerio from 'cheerio';
@@ -27,32 +27,6 @@ export interface ParseResult {
   parsedAt: string;
 }
 
-// Decode HTML entities like &#1055;&#1088;&#1080;&#1074;&#1077;&#1090; or &quot;
-function decodeHtmlEntities(str: string): string {
-  if (!str) return str;
-  
-  // Decode numeric entities (&#xHHHH; or &#NNNN;)
-  str = str.replace(/&#x([0-9a-fA-F]+);?/gi, (_, hex) => 
-    String.fromCharCode(parseInt(hex, 16))
-  );
-  str = str.replace(/&#(\d+);?/g, (_, num) => 
-    String.fromCharCode(parseInt(num, 10))
-  );
-  
-  // Decode common named entities
-  const entities: Record<string, string> = {
-    '&quot;': '"', '&amp;': '&', '&lt;': '<', '&gt;': '>',
-    '&nbsp;': ' ', '&apos;': "'", '&laquo;': '«', '&raquo;': '»',
-    '&mdash;': '—', '&ndash;': '–', '&hellip;': '…'
-  };
-  
-  for (const [entity, char] of Object.entries(entities)) {
-    str = str.split(entity).join(char);
-  }
-  
-  return str;
-}
-
 // ===== IMAGE FILTERING =====
 
 function isValidImageUrl(url: string): boolean {
@@ -61,7 +35,6 @@ function isValidImageUrl(url: string): boolean {
 
   const lower = url.toLowerCase();
   
-  // Skip avatars, profiles, icons, etc.
   const skipPatterns = [
     'avatar', 'userpic', 'user-pic', 'profile', 'community', 'communities',
     '_small.', '_tiny.', '/icons/', '/icon/', 'favicon', 'logo.', 'badge',
@@ -116,8 +89,18 @@ export async function parsePikabu(tag?: string): Promise<ParseResult> {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
-    const html = await response.text();
+    // Get array buffer and decode as UTF-8
+    const buffer = await response.arrayBuffer();
+    const decoder = new TextDecoder('utf-8');
+    const html = decoder.decode(buffer);
+    
     console.log(`[Parser] HTML length: ${html.length}`);
+    
+    // Debug: show first story title found
+    const titleMatch = html.match(/"title"\s*:\s*"([^"]+)"/);
+    if (titleMatch) {
+      console.log(`[Parser] First JSON title: "${titleMatch[1].substring(0, 50)}..."`);
+    }
     
     // Try to extract JSON data from the page
     const jsonPosts = extractJsonData(html);
@@ -131,8 +114,8 @@ export async function parsePikabu(tag?: string): Promise<ParseResult> {
     
     // Fallback to HTML parsing
     console.log(`[Parser] No JSON found, trying HTML parsing`);
-    const $ = cheerio.load(html, { decodeEntities: false });
-    const posts = parseHtmlPosts($);
+    const $ = cheerio.load(html, { decodeEntities: true });
+    const posts = parseHtmlPosts($, html);
     
     console.log(`[Parser] Parsed ${posts.length} posts from HTML`);
     return { posts: posts.filter(p => p.images.length > 0), error: null, parsedAt };
@@ -149,13 +132,20 @@ export async function parsePikabu(tag?: string): Promise<ParseResult> {
 function extractJsonData(html: string): Post[] {
   const posts: Post[] = [];
   
-  // Pattern 1: window.__INITIAL_STATE__ = {...}
-  let match = html.match(/window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*;\s*(?:<\/script>|$)/);
-  if (match) {
+  // Pattern: Find stories array in script content
+  // Pikabu stores data in script tags with application/json or in inline scripts
+  
+  // Try to find the main data script
+  const scriptRegex = /<script[^>]*>\s*(?:window\.__INITIAL_STATE__\s*=\s*)?(\{[\s\S]*?"stories"[\s\S]*?\})\s*<\/script>/gi;
+  let match;
+  
+  while ((match = scriptRegex.exec(html)) !== null) {
     try {
-      const data = JSON.parse(match[1]);
+      const jsonStr = match[1];
+      const data = JSON.parse(jsonStr);
+      
       if (data.stories && Array.isArray(data.stories)) {
-        console.log(`[Parser] Found __INITIAL_STATE__ with ${data.stories.length} stories`);
+        console.log(`[Parser] Found ${data.stories.length} stories in script`);
         for (const story of data.stories) {
           const post = parseStoryJson(story);
           if (post) posts.push(post);
@@ -163,68 +153,39 @@ function extractJsonData(html: string): Post[] {
         if (posts.length > 0) return posts;
       }
     } catch (e) {
-      console.log('[Parser] Failed to parse __INITIAL_STATE__');
+      // Continue to next match
     }
   }
   
-  // Pattern 2: Find stories array in any script
-  const scriptMatches = html.match(/<script[^>]*>[\s\S]*?<\/script>/gi) || [];
-  for (const script of scriptMatches) {
-    // Look for stories array
-    const storiesMatch = script.match(/"stories"\s*:\s*(\[[\s\S]*?\])\s*[,}]/);
-    if (storiesMatch) {
-      try {
-        // Need to extract just the array, handling nested braces
-        let jsonStr = storiesMatch[1];
-        // Balance brackets
-        let depth = 0;
-        let endPos = 0;
-        for (let i = 0; i < jsonStr.length; i++) {
-          if (jsonStr[i] === '[') depth++;
-          if (jsonStr[i] === ']') depth--;
+  // Alternative: look for stories array directly
+  const storiesRegex = /"stories"\s*:\s*(\[[\s\S]*?\](?:\s*[,}]|\s*$))/g;
+  while ((match = storiesRegex.exec(html)) !== null) {
+    try {
+      let jsonStr = match[1];
+      // Find proper end of array
+      let depth = 0;
+      let endPos = 0;
+      for (let i = 0; i < jsonStr.length; i++) {
+        if (jsonStr[i] === '[') depth++;
+        else if (jsonStr[i] === ']') {
+          depth--;
           if (depth === 0) {
             endPos = i + 1;
             break;
           }
         }
-        jsonStr = jsonStr.substring(0, endPos);
-        
-        const stories = JSON.parse(jsonStr);
-        console.log(`[Parser] Found stories array with ${stories.length} items`);
-        for (const story of stories) {
-          const post = parseStoryJson(story);
-          if (post) posts.push(post);
-        }
-        if (posts.length > 0) return posts;
-      } catch (e) {
-        // Continue to next pattern
       }
-    }
-  }
-  
-  // Pattern 3: Look for individual story objects with id and title
-  const storyPattern = /\{"id"\s*:\s*(\d+)[^}]*"title"\s*:\s*"([^"]+)"[^}]*\}/g;
-  let storyMatch;
-  while ((storyMatch = storyPattern.exec(html)) !== null) {
-    try {
-      // Try to parse the full object
-      const startIdx = storyMatch.index;
-      let depth = 0;
-      let endIdx = startIdx;
-      for (let i = startIdx; i < html.length; i++) {
-        if (html[i] === '{') depth++;
-        if (html[i] === '}') depth--;
-        if (depth === 0) {
-          endIdx = i + 1;
-          break;
-        }
+      jsonStr = jsonStr.substring(0, endPos);
+      
+      const stories = JSON.parse(jsonStr);
+      console.log(`[Parser] Found ${stories.length} stories in array`);
+      for (const story of stories) {
+        const post = parseStoryJson(story);
+        if (post) posts.push(post);
       }
-      const jsonStr = html.substring(startIdx, endIdx);
-      const story = JSON.parse(jsonStr);
-      const post = parseStoryJson(story);
-      if (post) posts.push(post);
+      if (posts.length > 0) return posts;
     } catch (e) {
-      // Skip invalid JSON
+      // Continue
     }
   }
   
@@ -234,8 +195,11 @@ function extractJsonData(html: string): Post[] {
 function parseStoryJson(obj: any): Post | null {
   if (!obj || !obj.id) return null;
 
-  // JSON.parse automatically handles \uXXXX escapes
+  // JSON.parse automatically handles \uXXXX escapes - this is the key!
   const title = obj.title || 'Без названия';
+  
+  // Debug output
+  console.log(`[Parser] JSON story ${obj.id}: "${title.substring(0, 40)}"`);
   
   // Extract images
   const images: string[] = [];
@@ -272,8 +236,6 @@ function parseStoryJson(obj: any): Post | null {
     }).filter((t: string) => t && t.length > 0);
   }
 
-  console.log(`[Parser] JSON story ${obj.id}: "${title.substring(0, 40)}..." tags: [${tags.slice(0, 3).join(', ')}]`);
-
   return {
     id: String(obj.id),
     title,
@@ -292,15 +254,18 @@ function parseStoryJson(obj: any): Post | null {
 
 // ===== HTML PARSING (fallback) =====
 
-function parseHtmlPosts($: cheerio.CheerioAPI): Post[] {
+function parseHtmlPosts($: cheerio.CheerioAPI, rawHtml: string): Post[] {
   const posts: Post[] = [];
+  
+  // First, try to extract data from data-* attributes or embedded JSON in HTML
+  // Many modern sites encode data in base64 or JSON in data attributes
   
   const storyElements = $('article.story, .story, article, [data-story-id]').toArray();
   console.log(`[Parser] Found ${storyElements.length} HTML story elements`);
   
   for (const element of storyElements) {
     try {
-      const post = parseHtmlStory($, element);
+      const post = parseHtmlStory($, element, rawHtml);
       if (post) posts.push(post);
     } catch (e) {
       // Skip invalid stories
@@ -310,7 +275,7 @@ function parseHtmlPosts($: cheerio.CheerioAPI): Post[] {
   return posts;
 }
 
-function parseHtmlStory($: cheerio.CheerioAPI, element: any): Post | null {
+function parseHtmlStory($: cheerio.CheerioAPI, element: any, rawHtml: string): Post | null {
   const $story = $(element);
   
   const storyId = $story.attr('data-story-id') || $story.attr('data-id') ||
@@ -318,15 +283,51 @@ function parseHtmlStory($: cheerio.CheerioAPI, element: any): Post | null {
   
   if (!storyId) return null;
   
-  // Title - decode HTML entities
+  // Try to find story data in raw HTML by ID
+  const storyJsonMatch = rawHtml.match(new RegExp(`\\{"id"\\s*:\\s*${storyId}[\\s\\S]{0,50}?"title"[\\s\\S]{0,2000}?\\}`));
+  if (storyJsonMatch) {
+    try {
+      // Find the complete JSON object
+      let startIdx = storyJsonMatch.index!;
+      let depth = 0;
+      let endIdx = startIdx;
+      for (let i = startIdx; i < rawHtml.length; i++) {
+        if (rawHtml[i] === '{') depth++;
+        else if (rawHtml[i] === '}') {
+          depth--;
+          if (depth === 0) {
+            endIdx = i + 1;
+            break;
+          }
+        }
+      }
+      const jsonStr = rawHtml.substring(startIdx, endIdx);
+      const storyData = JSON.parse(jsonStr);
+      const post = parseStoryJson(storyData);
+      if (post) return post;
+    } catch (e) {
+      // Fall through to HTML parsing
+    }
+  }
+  
+  // Fallback: extract from HTML (tags from URLs are reliable)
   let title = $story.find('.story__title, .story__title-link, h2, h3').first().text().trim();
-  title = decodeHtmlEntities(title);
   if (!title) return null;
   
-  // Link
+  // Title might be encoded - try to decode
+  try {
+    // Try decoding as if it's HTML entities
+    title = title.replace(/&#x([0-9a-fA-F]+);/gi, (_, hex) => 
+      String.fromCharCode(parseInt(hex, 16))
+    );
+    title = title.replace(/&#(\d+);/g, (_, num) => 
+      String.fromCharCode(parseInt(num, 10))
+    );
+  } catch {}
+  
   const link = $story.find('a[href*="/story/"]').first().attr('href') || `https://pikabu.ru/story/_${storyId}`;
   
-  // Tags from URLs (most reliable)
+  // Tags from URLs (reliable)
   const tags: string[] = [];
   $story.find('a[href*="/tag/"]').each((_, tagEl) => {
     const href = $(tagEl).attr('href') || '';
@@ -355,10 +356,9 @@ function parseHtmlStory($: cheerio.CheerioAPI, element: any): Post | null {
     }
   });
   
-  // Author
   const author = $story.find('.story__author, .user__nick, [class*="author"]').text().trim().toLowerCase() || 'unknown';
   
-  console.log(`[Parser] HTML story ${storyId}: "${title.substring(0, 40)}..." tags: [${tags.slice(0, 3).join(', ')}]`);
+  console.log(`[Parser] HTML story ${storyId}: "${title.substring(0, 40)}" tags: [${tags.slice(0, 3).join(', ')}]`);
   
   return {
     id: storyId,
