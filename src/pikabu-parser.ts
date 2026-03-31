@@ -52,7 +52,12 @@ export async function parsePikabu(tag?: string): Promise<ParseResult> {
     }
 
     const html = await response.text();
-    const $ = cheerio.load(html);
+    
+    // Debug: check encoding by looking for specific Russian characters
+    const hasRussianChars = /[а-яё]/i.test(html);
+    console.log(`[Parser] HTML length: ${html.length}, has Russian chars: ${hasRussianChars}`);
+    
+    const $ = cheerio.load(html, { decodeEntities: true, xmlMode: false });
     const posts: Post[] = [];
 
     // First try to parse from JSON data (more reliable for tags)
@@ -122,27 +127,34 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
   // Tags - try multiple selectors
   const tags: string[] = [];
   
-  // Method 1: .story__tag
-  $story.find('.story__tag, .tags__tag').each((_, tagEl) => {
-    const tag = $(tagEl).text().trim().toLowerCase();
-    if (tag && tag.length > 0 && tag.length < 50) tags.push(tag);
+  // Method 1: Extract from href="/tag/..." (most reliable)
+  $story.find('a[href*="/tag/"]').each((_, tagEl) => {
+    const href = $(tagEl).attr('href') || '';
+    const tagMatch = href.match(/\/tag\/([^/?]+)/);
+    if (tagMatch) {
+      const tag = decodeURIComponent(tagMatch[1]).toLowerCase().trim();
+      if (tag && tag.length > 0 && tag.length < 50 && !tags.includes(tag)) {
+        tags.push(tag);
+      }
+    }
+    // Also try text content
+    const text = $(tagEl).text().trim().toLowerCase();
+    if (text && text.length > 0 && text.length < 50 && !tags.includes(text) && !text.includes('\n')) {
+      tags.push(text);
+    }
   });
   
-  // Method 2: a[href*="/tag/"]
+  // Method 2: .story__tag class
   if (tags.length === 0) {
-    $story.find('a[href*="/tag/"]').each((_, tagEl) => {
+    $story.find('.story__tag, .tags__tag, [class*="tag"]').each((_, tagEl) => {
       const tag = $(tagEl).text().trim().toLowerCase();
-      if (tag && tag.length > 0 && tag.length < 50) tags.push(tag);
+      if (tag && tag.length > 0 && tag.length < 50 && !tags.includes(tag) && !tag.includes('\n')) {
+        tags.push(tag);
+      }
     });
   }
   
-  // Method 3: [class*="tag"]
-  if (tags.length === 0) {
-    $story.find('[class*="tag"]').each((_, tagEl) => {
-      const tag = $(tagEl).text().trim().toLowerCase();
-      if (tag && tag.length > 0 && tag.length < 50 && !tag.includes('\n')) tags.push(tag);
-    });
-  }
+  console.log(`[Parser] Story ${storyId} parsed tags: [${tags.slice(0, 5).join(', ')}]`);
 
   // Images - try multiple selectors
   const images: string[] = [];
