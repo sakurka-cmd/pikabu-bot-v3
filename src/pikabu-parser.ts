@@ -28,6 +28,72 @@ export interface ParseResult {
   parsedAt: string;
 }
 
+// ===== IMAGE FILTERING FUNCTIONS (defined first) =====
+
+function isValidImageUrl(url: string): boolean {
+  if (!url || typeof url !== 'string') return false;
+  if (!url.startsWith('http')) return false;
+
+  const lower = url.toLowerCase();
+  
+  // Skip avatars and profile images
+  if (lower.includes('avatar')) return false;
+  if (lower.includes('/user/') && lower.includes('/image/')) return false;
+  if (lower.includes('profile')) return false;
+  if (lower.includes('_small.')) return false;
+  if (lower.includes('_tiny.')) return false;
+  if (lower.includes('/icons/')) return false;
+  if (lower.includes('favicon')) return false;
+  if (lower.includes('logo.')) return false;
+  if (lower.includes('badge')) return false;
+  
+  // Valid image patterns
+  return lower.includes('.jpg') ||
+    lower.includes('.jpeg') ||
+    lower.includes('.png') ||
+    lower.includes('.gif') ||
+    lower.includes('.webp') ||
+    lower.includes('/image/');
+}
+
+function isContentImageUrl(url: string): boolean {
+  if (!isValidImageUrl(url)) return false;
+  
+  const lower = url.toLowerCase();
+  
+  // Pikabu content images (s.pikabu.ru or pikabu.ru/image)
+  if (lower.includes('s.pikabu.ru') || lower.includes('pikabu.ru')) {
+    // Skip avatars specifically
+    if (lower.includes('avatar')) return false;
+    return true;
+  }
+  
+  // External image hosts
+  if (lower.includes('imgur')) return true;
+  if (lower.includes('i.redd.it')) return true;
+  if (lower.includes('postimg')) return true;
+  if (lower.includes('ibb.co')) return true;
+  
+  // Generic image URLs
+  if (lower.includes('/image/')) return true;
+  
+  return false;
+}
+
+function normalizeImageUrl(url: string): string {
+  return url
+    .replace(/\/preview\//g, '/')
+    .replace(/_preview/g, '')
+    .replace(/\?.*$/, '');
+}
+
+function extractIdFromUrl(url: string): string {
+  const match = url.match(/\/story\/[^_]+_(\d+)/);
+  return match ? match[1] : '';
+}
+
+// ===== MAIN PARSING FUNCTION =====
+
 export async function parsePikabu(tag?: string): Promise<ParseResult> {
   const parsedAt = new Date().toISOString();
 
@@ -106,6 +172,8 @@ export async function parsePikabu(tag?: string): Promise<ParseResult> {
   }
 }
 
+// ===== HTML PARSING =====
+
 function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
   const $story = $(element);
 
@@ -156,26 +224,27 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
   
   console.log(`[Parser] Story ${storyId} parsed tags: [${tags.slice(0, 5).join(', ')}]`);
 
-  // Images - try multiple selectors
+  // Images - only content images, skip avatars
   const images: string[] = [];
 
-  // Method 1: img tags
+  // Method 1: img tags (skip small images and avatars)
   $story.find('img').each((_, imgEl) => {
     const src = $(imgEl).attr('data-src') ||
       $(imgEl).attr('src') ||
       $(imgEl).attr('data-source');
-    if (src && isValidImageUrl(src)) {
+    
+    if (src && isContentImageUrl(src)) {
       images.push(normalizeImageUrl(src));
     }
   });
 
-  // Method 2: data-images attribute
+  // Method 2: data-images attribute (usually content images)
   const dataImages = $story.attr('data-images') || $story.find('[data-images]').attr('data-images');
   if (dataImages) {
     try {
       const parsed = JSON.parse(dataImages);
       if (Array.isArray(parsed)) {
-        images.push(...parsed.filter(isValidImageUrl).map(normalizeImageUrl));
+        images.push(...parsed.filter(isContentImageUrl).map(normalizeImageUrl));
       }
     } catch { }
   }
@@ -184,10 +253,12 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
   $story.find('[style*="background-image"]').each((_, el) => {
     const style = $(el).attr('style') || '';
     const match = style.match(/url\(['"]?([^'")\s]+)['"]?\)/);
-    if (match && isValidImageUrl(match[1])) {
+    if (match && isContentImageUrl(match[1])) {
       images.push(normalizeImageUrl(match[1]));
     }
   });
+  
+  console.log(`[Parser] Story ${storyId} found ${images.length} content images`);
 
   // Rating
   const ratingText = $story.find('.story__rating-count, .rating__count, [class*="rating"]').text().trim();
@@ -233,6 +304,8 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
     parsedAt: new Date().toISOString(),
   };
 }
+
+// ===== JSON PARSING =====
 
 function parseFromJsonData($: cheerio.CheerioAPI): Post[] {
   const posts: Post[] = [];
@@ -333,7 +406,7 @@ function parseStoryObject(obj: any): Post | null {
     title: obj.title || 'Без названия',
     link: `https://pikabu.ru/story/${obj.story_link || obj.story_link_id || obj.id}`,
     tags,
-    images: images.filter(isValidImageUrl).map(normalizeImageUrl),
+    images: images.filter(isContentImageUrl).map(normalizeImageUrl),
     rating: obj.rating || obj.up_votes || 0,
     author: (obj.author_login || obj.author || obj.user?.login || 'Unknown').toLowerCase(),
     authorName: obj.author_name || obj.author_login || obj.user?.name || undefined,
@@ -344,34 +417,7 @@ function parseStoryObject(obj: any): Post | null {
   };
 }
 
-function extractIdFromUrl(url: string): string {
-  const match = url.match(/\/story\/[^_]+_(\d+)/);
-  return match ? match[1] : '';
-}
-
-function isValidImageUrl(url: string): boolean {
-  if (!url || typeof url !== 'string') return false;
-  if (!url.startsWith('http')) return false;
-
-  const lower = url.toLowerCase();
-  return lower.includes('.jpg') ||
-    lower.includes('.jpeg') ||
-    lower.includes('.png') ||
-    lower.includes('.gif') ||
-    lower.includes('.webp') ||
-    lower.includes('/image/') ||
-    lower.includes('pikabu.ru') ||
-    lower.includes('imgur') ||
-    lower.includes('i.redd.it') ||
-    lower.includes('s.pikabu');
-}
-
-function normalizeImageUrl(url: string): string {
-  return url
-    .replace(/\/preview\//g, '/')
-    .replace(/_preview/g, '')
-    .replace(/\?.*$/, '');
-}
+// ===== EXPORT =====
 
 export async function parseMultipleTags(tags: string[]): Promise<Post[]> {
   const allPosts: Post[] = [];
