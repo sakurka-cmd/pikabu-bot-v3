@@ -1,0 +1,20 @@
+{
+  "name": "pikabu-bot-v3",
+  "version": "3.0.0",
+  "description": "Pikabu Telegram Bot - Minimal version with sql.js",
+  "main": "src/main.ts",
+  "scripts": {
+    "start": "bun run src/main.ts",
+    "dev": "bun --watch run src/main.ts"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "node-telegram-bot-api": "^0.67.0",
+    "sql.js": "^1.10.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "@types/node-telegram-bot-api": "^0.64.0",
+    "typescript": "^5"
+  }
+}
