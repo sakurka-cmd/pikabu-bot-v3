@@ -38,14 +38,46 @@ function isValidImageUrl(url: string): boolean {
   
   // Skip avatars and profile images
   if (lower.includes('avatar')) return false;
+  if (lower.includes('userpic')) return false;
+  if (lower.includes('user-pic')) return false;
   if (lower.includes('/user/') && lower.includes('/image/')) return false;
   if (lower.includes('profile')) return false;
+  
+  // Skip small thumbnails and icons
   if (lower.includes('_small.')) return false;
   if (lower.includes('_tiny.')) return false;
   if (lower.includes('/icons/')) return false;
+  if (lower.includes('/icon/')) return false;
   if (lower.includes('favicon')) return false;
   if (lower.includes('logo.')) return false;
   if (lower.includes('badge')) return false;
+  
+  // Skip size variants (avatar sizes)
+  if (lower.includes('_32x32')) return false;
+  if (lower.includes('_64x64')) return false;
+  if (lower.includes('_48x48')) return false;
+  if (lower.includes('_128x128')) return false;
+  if (lower.includes('-32x32')) return false;
+  if (lower.includes('-64x64')) return false;
+  if (lower.includes('-48x48')) return false;
+  if (lower.includes('-128x128')) return false;
+  if (lower.includes('/32_')) return false;
+  if (lower.includes('/64_')) return false;
+  if (lower.includes('/128_')) return false;
+  
+  // Skip community icons
+  if (lower.includes('community')) return false;
+  if (lower.includes('communities')) return false;
+  
+  // Skip emoji and stickers
+  if (lower.includes('emoji')) return false;
+  if (lower.includes('sticker')) return false;
+  if (lower.includes('smile')) return false;
+  
+  // Skip UI elements
+  if (lower.includes('button')) return false;
+  if (lower.includes('spinner')) return false;
+  if (lower.includes('loader')) return false;
   
   // Valid image patterns
   return lower.includes('.jpg') ||
@@ -63,8 +95,10 @@ function isContentImageUrl(url: string): boolean {
   
   // Pikabu content images (s.pikabu.ru or pikabu.ru/image)
   if (lower.includes('s.pikabu.ru') || lower.includes('pikabu.ru')) {
-    // Skip avatars specifically
+    // Double check - skip any remaining avatars
     if (lower.includes('avatar')) return false;
+    if (lower.includes('userpic')) return false;
+    if (lower.includes('community')) return false;
     return true;
   }
   
@@ -227,11 +261,31 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
   // Images - only content images, skip avatars
   const images: string[] = [];
 
-  // Method 1: img tags (skip small images and avatars)
-  $story.find('img').each((_, imgEl) => {
-    const src = $(imgEl).attr('data-src') ||
-      $(imgEl).attr('src') ||
-      $(imgEl).attr('data-source');
+  // IMPORTANT: Only look for images in the story content area, not header/footer
+  const $contentArea = $story.find('.story__content, .story-block, .story__body, [class*="content"]').first();
+  
+  // Method 1: img tags in content area only
+  const $searchArea = $contentArea.length > 0 ? $contentArea : $story;
+  
+  $searchArea.find('img').each((_, imgEl) => {
+    // Skip if parent is clearly an avatar container
+    const $img = $(imgEl);
+    const parentClass = $img.parent().attr('class') || '';
+    const grandparentClass = $img.parent().parent().attr('class') || '';
+    
+    if (parentClass.toLowerCase().includes('avatar') ||
+        parentClass.toLowerCase().includes('user') ||
+        parentClass.toLowerCase().includes('author') ||
+        parentClass.toLowerCase().includes('community') ||
+        grandparentClass.toLowerCase().includes('avatar') ||
+        grandparentClass.toLowerCase().includes('user')) {
+      console.log(`[Parser] Skipping avatar image: ${parentClass}`);
+      return;
+    }
+    
+    const src = $img.attr('data-src') ||
+      $img.attr('src') ||
+      $img.attr('data-source');
     
     if (src && isContentImageUrl(src)) {
       images.push(normalizeImageUrl(src));
@@ -249,8 +303,8 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
     } catch { }
   }
   
-  // Method 3: background-image in style
-  $story.find('[style*="background-image"]').each((_, el) => {
+  // Method 3: background-image in style (only in content area)
+  $searchArea.find('[style*="background-image"]').each((_, el) => {
     const style = $(el).attr('style') || '';
     const match = style.match(/url\(['"]?([^'")\s]+)['"]?\)/);
     if (match && isContentImageUrl(match[1])) {
@@ -365,32 +419,38 @@ function parseStoryObject(obj: any): Post | null {
 
   const images: string[] = [];
 
-  // Extract images from various fields
+  // Extract images from various fields - ONLY content images
   if (obj.images && Array.isArray(obj.images)) {
-    images.push(...obj.images.map((img: any) =>
-      typeof img === 'string' ? img : img.link || img.url || img.src
-    ).filter(Boolean));
+    for (const img of obj.images) {
+      const url = typeof img === 'string' ? img : img.link || img.url || img.src;
+      if (url && isContentImageUrl(url)) {
+        images.push(url);
+      }
+    }
   }
 
-  if (obj.image && typeof obj.image === 'string') {
-    images.push(obj.image);
-  }
-
-  if (obj.previewImage && typeof obj.previewImage === 'string') {
-    images.push(obj.previewImage);
-  }
-
-  if (obj.video_gif && typeof obj.video_gif === 'string') {
-    images.push(obj.video_gif);
-  }
-  
-  // Extract from blocks if available
+  // Extract from blocks if available (more reliable for content images)
   if (obj.blocks && Array.isArray(obj.blocks)) {
     for (const block of obj.blocks) {
       if (block.type === 'image' && block.data?.link) {
-        images.push(block.data.link);
+        if (isContentImageUrl(block.data.link)) {
+          images.push(block.data.link);
+        }
       }
     }
+  }
+
+  // Only use previewImage if it's a valid content image
+  if (obj.image && typeof obj.image === 'string' && isContentImageUrl(obj.image)) {
+    images.push(obj.image);
+  }
+
+  if (obj.previewImage && typeof obj.previewImage === 'string' && isContentImageUrl(obj.previewImage)) {
+    images.push(obj.previewImage);
+  }
+
+  if (obj.video_gif && typeof obj.video_gif === 'string' && isContentImageUrl(obj.video_gif)) {
+    images.push(obj.video_gif);
   }
 
   // Extract tags
@@ -406,7 +466,7 @@ function parseStoryObject(obj: any): Post | null {
     title: obj.title || 'Без названия',
     link: `https://pikabu.ru/story/${obj.story_link || obj.story_link_id || obj.id}`,
     tags,
-    images: images.filter(isContentImageUrl).map(normalizeImageUrl),
+    images: images.map(normalizeImageUrl),
     rating: obj.rating || obj.up_votes || 0,
     author: (obj.author_login || obj.author || obj.user?.login || 'Unknown').toLowerCase(),
     authorName: obj.author_name || obj.author_login || obj.user?.name || undefined,
