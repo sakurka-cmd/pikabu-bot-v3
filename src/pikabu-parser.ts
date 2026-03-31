@@ -1,6 +1,5 @@
 /**
- * Pikabu Parser
- * Extracts posts with images, authors and previews
+ * Pikabu Parser - Fixed for proper encoding
  */
 
 import * as cheerio from 'cheerio';
@@ -28,7 +27,33 @@ export interface ParseResult {
   parsedAt: string;
 }
 
-// ===== IMAGE FILTERING FUNCTIONS (defined first) =====
+// Decode HTML entities like &#1055;&#1088;&#1080;&#1074;&#1077;&#1090; or &quot;
+function decodeHtmlEntities(str: string): string {
+  if (!str) return str;
+  
+  // Decode numeric entities (&#xHHHH; or &#NNNN;)
+  str = str.replace(/&#x([0-9a-fA-F]+);?/gi, (_, hex) => 
+    String.fromCharCode(parseInt(hex, 16))
+  );
+  str = str.replace(/&#(\d+);?/g, (_, num) => 
+    String.fromCharCode(parseInt(num, 10))
+  );
+  
+  // Decode common named entities
+  const entities: Record<string, string> = {
+    '&quot;': '"', '&amp;': '&', '&lt;': '<', '&gt;': '>',
+    '&nbsp;': ' ', '&apos;': "'", '&laquo;': '«', '&raquo;': '»',
+    '&mdash;': '—', '&ndash;': '–', '&hellip;': '…'
+  };
+  
+  for (const [entity, char] of Object.entries(entities)) {
+    str = str.split(entity).join(char);
+  }
+  
+  return str;
+}
+
+// ===== IMAGE FILTERING =====
 
 function isValidImageUrl(url: string): boolean {
   if (!url || typeof url !== 'string') return false;
@@ -36,107 +61,35 @@ function isValidImageUrl(url: string): boolean {
 
   const lower = url.toLowerCase();
   
-  // Skip avatars and profile images
-  if (lower.includes('avatar')) return false;
-  if (lower.includes('userpic')) return false;
-  if (lower.includes('user-pic')) return false;
-  if (lower.includes('/user/') && lower.includes('/image/')) return false;
-  if (lower.includes('profile')) return false;
+  // Skip avatars, profiles, icons, etc.
+  const skipPatterns = [
+    'avatar', 'userpic', 'user-pic', 'profile', 'community', 'communities',
+    '_small.', '_tiny.', '/icons/', '/icon/', 'favicon', 'logo.', 'badge',
+    '_32x32', '_64x64', '_48x48', '_128x128', '-32x32', '-64x64',
+    '/32_', '/64_', '/128_', 'emoji', 'sticker', 'smile', 'button', 'spinner', 'loader'
+  ];
   
-  // Skip small thumbnails and icons
-  if (lower.includes('_small.')) return false;
-  if (lower.includes('_tiny.')) return false;
-  if (lower.includes('/icons/')) return false;
-  if (lower.includes('/icon/')) return false;
-  if (lower.includes('favicon')) return false;
-  if (lower.includes('logo.')) return false;
-  if (lower.includes('badge')) return false;
+  for (const pattern of skipPatterns) {
+    if (lower.includes(pattern)) return false;
+  }
   
-  // Skip size variants (avatar sizes)
-  if (lower.includes('_32x32')) return false;
-  if (lower.includes('_64x64')) return false;
-  if (lower.includes('_48x48')) return false;
-  if (lower.includes('_128x128')) return false;
-  if (lower.includes('-32x32')) return false;
-  if (lower.includes('-64x64')) return false;
-  if (lower.includes('-48x48')) return false;
-  if (lower.includes('-128x128')) return false;
-  if (lower.includes('/32_')) return false;
-  if (lower.includes('/64_')) return false;
-  if (lower.includes('/128_')) return false;
-  
-  // Skip community icons
-  if (lower.includes('community')) return false;
-  if (lower.includes('communities')) return false;
-  
-  // Skip emoji and stickers
-  if (lower.includes('emoji')) return false;
-  if (lower.includes('sticker')) return false;
-  if (lower.includes('smile')) return false;
-  
-  // Skip UI elements
-  if (lower.includes('button')) return false;
-  if (lower.includes('spinner')) return false;
-  if (lower.includes('loader')) return false;
-  
-  // Valid image patterns
-  return lower.includes('.jpg') ||
-    lower.includes('.jpeg') ||
-    lower.includes('.png') ||
-    lower.includes('.gif') ||
-    lower.includes('.webp') ||
-    lower.includes('/image/');
+  return lower.includes('.jpg') || lower.includes('.jpeg') || lower.includes('.png') ||
+    lower.includes('.gif') || lower.includes('.webp') || lower.includes('/image/');
 }
 
 function isContentImageUrl(url: string): boolean {
   if (!isValidImageUrl(url)) return false;
-  
   const lower = url.toLowerCase();
-  
-  // Pikabu content images (s.pikabu.ru or pikabu.ru/image)
-  if (lower.includes('s.pikabu.ru') || lower.includes('pikabu.ru')) {
-    // Double check - skip any remaining avatars
-    if (lower.includes('avatar')) return false;
-    if (lower.includes('userpic')) return false;
-    if (lower.includes('community')) return false;
+  if (lower.includes('s.pikabu.ru') || lower.includes('pikabu.ru') || 
+      lower.includes('imgur') || lower.includes('i.redd.it') || 
+      lower.includes('postimg') || lower.includes('ibb.co') || lower.includes('/image/')) {
     return true;
   }
-  
-  // External image hosts
-  if (lower.includes('imgur')) return true;
-  if (lower.includes('i.redd.it')) return true;
-  if (lower.includes('postimg')) return true;
-  if (lower.includes('ibb.co')) return true;
-  
-  // Generic image URLs
-  if (lower.includes('/image/')) return true;
-  
   return false;
 }
 
 function normalizeImageUrl(url: string): string {
-  return url
-    .replace(/\/preview\//g, '/')
-    .replace(/_preview/g, '')
-    .replace(/\?.*$/, '');
-}
-
-function extractIdFromUrl(url: string): string {
-  const match = url.match(/\/story\/[^_]+_(\d+)/);
-  return match ? match[1] : '';
-}
-
-// Decode unicode escape sequences like \u041f\u0440\u0438\u0432\u0435\u0442
-function decodeUnicodeEscapes(str: string): string {
-  if (!str) return str;
-  try {
-    // Handle \uXXXX sequences
-    return str.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => 
-      String.fromCharCode(parseInt(hex, 16))
-    );
-  } catch {
-    return str;
-  }
+  return url.replace(/\/preview\//g, '/').replace(/_preview/g, '').replace(/\?.*$/, '');
 }
 
 // ===== MAIN PARSING FUNCTION =====
@@ -156,8 +109,6 @@ export async function parsePikabu(tag?: string): Promise<ParseResult> {
         'User-Agent': USER_AGENT,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Accept-Charset': 'utf-8',
-        'Cache-Control': 'no-cache',
       },
     });
 
@@ -165,316 +116,139 @@ export async function parsePikabu(tag?: string): Promise<ParseResult> {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
-    // Get raw text and ensure proper UTF-8 handling
     const html = await response.text();
+    console.log(`[Parser] HTML length: ${html.length}`);
     
-    // Debug: check encoding
-    const hasRussianChars = /[а-яёА-ЯЁ]/.test(html);
-    const hasUnicodeEscapes = /\\u[0-9a-fA-F]{4}/.test(html);
-    console.log(`[Parser] HTML length: ${html.length}, Russian chars: ${hasRussianChars}, Unicode escapes: ${hasUnicodeEscapes}`);
+    // Try to extract JSON data from the page
+    const jsonPosts = extractJsonData(html);
     
-    // Use decodeEntities: false to preserve original encoding
-    const $ = cheerio.load(html, { 
-      decodeEntities: false,
-      xmlMode: false,
-      lowerCaseTags: false,
-      lowerCaseAttributeNames: false
-    });
-    
-    const posts: Post[] = [];
-
-    // First try to parse from JSON data (more reliable for tags)
-    const jsonPosts = parseFromJsonData($, html);
     if (jsonPosts.length > 0) {
-      console.log(`[Parser] Using JSON data: found ${jsonPosts.length} posts`);
-      posts.push(...jsonPosts.filter(p => p.images.length > 0));
-    } else {
-      // Fallback to HTML parsing
-      let storyElements = $('article.story, .story').toArray();
-      
-      if (storyElements.length === 0) {
-        storyElements = $('article').toArray();
-      }
-      if (storyElements.length === 0) {
-        storyElements = $('[data-story-id]').toArray();
-      }
-      if (storyElements.length === 0) {
-        storyElements = $('.story__main, .story-main').toArray();
-      }
-      
-      console.log(`[Parser] No JSON data, parsing ${storyElements.length} HTML story elements`);
-
-      for (const element of storyElements) {
-        try {
-          const post = parseStoryElement($, element);
-          if (post && post.images.length > 0) {
-            posts.push(post);
-          }
-        } catch (e) {
-          console.error('[Parser] Error parsing story element:', e);
-        }
-      }
+      console.log(`[Parser] Extracted ${jsonPosts.length} posts from JSON`);
+      const postsWithImages = jsonPosts.filter(p => p.images.length > 0);
+      console.log(`[Parser] ${postsWithImages.length} posts have images`);
+      return { posts: postsWithImages, error: null, parsedAt };
     }
-
-    console.log(`[Parser] Parsed ${posts.length} posts with images`);
-
-    return { posts, error: null, parsedAt };
+    
+    // Fallback to HTML parsing
+    console.log(`[Parser] No JSON found, trying HTML parsing`);
+    const $ = cheerio.load(html, { decodeEntities: false });
+    const posts = parseHtmlPosts($);
+    
+    console.log(`[Parser] Parsed ${posts.length} posts from HTML`);
+    return { posts: posts.filter(p => p.images.length > 0), error: null, parsedAt };
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     console.error('[Parser] Error:', errorMessage);
-
     return { posts: [], error: errorMessage, parsedAt };
   }
 }
 
-// ===== HTML PARSING =====
+// ===== JSON EXTRACTION =====
 
-function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
-  const $story = $(element);
-
-  const storyId = $story.attr('data-story-id') ||
-    $story.attr('data-id') ||
-    $story.find('[data-story-id]').attr('data-story-id') ||
-    extractIdFromUrl($story.find('a[href*="/story/"]').attr('href') || '');
-
-  if (!storyId) return null;
-
-  const title = $story.find('.story__title, .story__title-link, a[href*="/story/"]').first().text().trim() ||
-    $story.find('h2, h3').first().text().trim();
-
-  if (!title) return null;
-
-  const link = $story.find('a[href*="/story/"]').first().attr('href') ||
-    `https://pikabu.ru/story/_${storyId}`;
-
-  // Tags - try multiple selectors
-  const tags: string[] = [];
-  
-  // Method 1: Extract from href="/tag/..." (most reliable)
-  $story.find('a[href*="/tag/"]').each((_, tagEl) => {
-    const href = $(tagEl).attr('href') || '';
-    const tagMatch = href.match(/\/tag\/([^/?]+)/);
-    if (tagMatch) {
-      const tag = decodeURIComponent(tagMatch[1]).toLowerCase().trim();
-      if (tag && tag.length > 0 && tag.length < 50 && !tags.includes(tag)) {
-        tags.push(tag);
-      }
-    }
-    // Also try text content
-    const text = $(tagEl).text().trim().toLowerCase();
-    if (text && text.length > 0 && text.length < 50 && !tags.includes(text) && !text.includes('\n')) {
-      tags.push(text);
-    }
-  });
-  
-  // Method 2: .story__tag class
-  if (tags.length === 0) {
-    $story.find('.story__tag, .tags__tag, [class*="tag"]').each((_, tagEl) => {
-      const tag = $(tagEl).text().trim().toLowerCase();
-      if (tag && tag.length > 0 && tag.length < 50 && !tags.includes(tag) && !tag.includes('\n')) {
-        tags.push(tag);
-      }
-    });
-  }
-  
-  console.log(`[Parser] Story ${storyId} tags: [${tags.slice(0, 5).join(', ')}]`);
-
-  // Images - only content images
-  const images: string[] = [];
-  const $contentArea = $story.find('.story__content, .story-block, .story__body, [class*="content"]').first();
-  const $searchArea = $contentArea.length > 0 ? $contentArea : $story;
-  
-  $searchArea.find('img').each((_, imgEl) => {
-    const $img = $(imgEl);
-    const parentClass = $img.parent().attr('class') || '';
-    const grandparentClass = $img.parent().parent().attr('class') || '';
-    
-    if (parentClass.toLowerCase().includes('avatar') ||
-        parentClass.toLowerCase().includes('user') ||
-        parentClass.toLowerCase().includes('author') ||
-        parentClass.toLowerCase().includes('community') ||
-        grandparentClass.toLowerCase().includes('avatar') ||
-        grandparentClass.toLowerCase().includes('user')) {
-      return;
-    }
-    
-    const src = $img.attr('data-src') ||
-      $img.attr('src') ||
-      $img.attr('data-source');
-    
-    if (src && isContentImageUrl(src)) {
-      images.push(normalizeImageUrl(src));
-    }
-  });
-
-  // Method 2: data-images attribute
-  const dataImages = $story.attr('data-images') || $story.find('[data-images]').attr('data-images');
-  if (dataImages) {
-    try {
-      const parsed = JSON.parse(dataImages);
-      if (Array.isArray(parsed)) {
-        images.push(...parsed.filter(isContentImageUrl).map(normalizeImageUrl));
-      }
-    } catch { }
-  }
-  
-  // Method 3: background-image
-  $searchArea.find('[style*="background-image"]').each((_, el) => {
-    const style = $(el).attr('style') || '';
-    const match = style.match(/url\(['"]?([^'")\s]+)['"]?\)/);
-    if (match && isContentImageUrl(match[1])) {
-      images.push(normalizeImageUrl(match[1]));
-    }
-  });
-  
-  console.log(`[Parser] Story ${storyId} found ${images.length} content images`);
-
-  // Rating
-  const ratingText = $story.find('.story__rating-count, .rating__count, [class*="rating"]').text().trim();
-  const rating = parseFloat(ratingText) || 0;
-
-  // Author
-  const $author = $story.find('.story__author, .user__nick, [class*="author"], a[data-user-id]');
-  const author = $author.text().trim().replace('@', '') ||
-    $author.attr('href')?.split('/').pop() ||
-    'Unknown';
-  const authorName = $author.attr('title') || $author.text().trim() || undefined;
-
-  // Preview text
-  let bodyPreview = '';
-  $story.find('.story__content, .story-block_type_text, div[class*="content"]').each((_, el) => {
-    const text = $(el).text().trim();
-    if (text.length > bodyPreview.length && text.length < 1000) {
-      bodyPreview = text;
-    }
-  });
-
-  // Comments
-  const commentsText = $story.find('.story__comments-count, [class*="comments"]').text().trim();
-  const commentsCount = parseInt(commentsText) || 0;
-
-  // Date
-  const datetime = $story.find('.story__datetime, time, [class*="date"]').attr('datetime') ||
-    $story.find('.story__datetime, time, [class*="date"]').attr('title') ||
-    new Date().toISOString();
-
-  return {
-    id: storyId,
-    title: decodeUnicodeEscapes(title),
-    link: link.startsWith('http') ? link : `https://pikabu.ru${link}`,
-    tags: tags.map(decodeUnicodeEscapes),
-    images: [...new Set(images)],
-    rating,
-    author: decodeUnicodeEscapes(author.toLowerCase().replace('@', '')),
-    authorName: authorName ? decodeUnicodeEscapes(authorName) : undefined,
-    bodyPreview: bodyPreview ? decodeUnicodeEscapes(bodyPreview.slice(0, 500)) : undefined,
-    commentsCount,
-    publishedAt: datetime,
-    parsedAt: new Date().toISOString(),
-  };
-}
-
-// ===== JSON PARSING =====
-
-function parseFromJsonData($: cheerio.CheerioAPI, rawHtml: string): Post[] {
+function extractJsonData(html: string): Post[] {
   const posts: Post[] = [];
-
-  // Try to find JSON data directly in raw HTML (more reliable)
-  // Look for window.__INITIAL_STATE__ or similar patterns
-  const statePatterns = [
-    /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*;\s*<\/script>/,
-    /__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*;/,
-    /"stories"\s*:\s*(\[[\s\S]*?\])\s*[,}]/,
-    /stories\s*:\s*(\[[\s\S]*?\])\s*[,}]/
-  ];
   
-  for (const pattern of statePatterns) {
-    const matches = rawHtml.match(pattern);
-    if (matches) {
-      try {
-        let jsonStr = matches[1];
-        
-        // The JSON might contain unicode escapes - try to parse it directly
-        // Node's JSON.parse handles \uXXXX automatically
-        const data = JSON.parse(jsonStr);
-        
-        let stories: any[] = [];
-        
-        if (Array.isArray(data)) {
-          stories = data;
-        } else if (data.stories && Array.isArray(data.stories)) {
-          stories = data.stories;
-        }
-        
-        if (stories.length > 0) {
-          console.log(`[Parser] Found ${stories.length} stories in JSON (pattern: ${pattern.source.slice(0, 30)}...)`);
-          
-          for (const story of stories) {
-            const post = parseStoryObject(story);
-            if (post) {
-              posts.push(post);
-            }
-          }
-          
-          if (posts.length > 0) return posts;
-        }
-      } catch (e) {
-        console.error('[Parser] JSON parse error:', e);
-      }
-    }
-  }
-
-  // Fallback: scan script tags
-  $('script').each((_, scriptEl) => {
-    const content = $(scriptEl).html() || '';
-    if (!content || content.length < 100) return;
-
+  // Pattern 1: window.__INITIAL_STATE__ = {...}
+  let match = html.match(/window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*;\s*(?:<\/script>|$)/);
+  if (match) {
     try {
-      // Try to extract stories from various JSON structures
-      const patterns = [
-        /"stories"\s*:\s*(\[[\s\S]*?\])\s*[,}]/,
-        /stories\s*:\s*(\[[\s\S]*?\])\s*[,}]/
-      ];
-      
-      for (const pattern of patterns) {
-        const matches = content.match(pattern);
-        if (matches) {
-          const stories = JSON.parse(matches[1]);
-          console.log(`[Parser] Found ${stories.length} stories in script tag`);
-          
-          for (const story of stories) {
-            const post = parseStoryObject(story);
-            if (post) {
-              posts.push(post);
-            }
-          }
+      const data = JSON.parse(match[1]);
+      if (data.stories && Array.isArray(data.stories)) {
+        console.log(`[Parser] Found __INITIAL_STATE__ with ${data.stories.length} stories`);
+        for (const story of data.stories) {
+          const post = parseStoryJson(story);
+          if (post) posts.push(post);
         }
+        if (posts.length > 0) return posts;
       }
     } catch (e) {
-      // Ignore parse errors in individual scripts
+      console.log('[Parser] Failed to parse __INITIAL_STATE__');
     }
-  });
-
+  }
+  
+  // Pattern 2: Find stories array in any script
+  const scriptMatches = html.match(/<script[^>]*>[\s\S]*?<\/script>/gi) || [];
+  for (const script of scriptMatches) {
+    // Look for stories array
+    const storiesMatch = script.match(/"stories"\s*:\s*(\[[\s\S]*?\])\s*[,}]/);
+    if (storiesMatch) {
+      try {
+        // Need to extract just the array, handling nested braces
+        let jsonStr = storiesMatch[1];
+        // Balance brackets
+        let depth = 0;
+        let endPos = 0;
+        for (let i = 0; i < jsonStr.length; i++) {
+          if (jsonStr[i] === '[') depth++;
+          if (jsonStr[i] === ']') depth--;
+          if (depth === 0) {
+            endPos = i + 1;
+            break;
+          }
+        }
+        jsonStr = jsonStr.substring(0, endPos);
+        
+        const stories = JSON.parse(jsonStr);
+        console.log(`[Parser] Found stories array with ${stories.length} items`);
+        for (const story of stories) {
+          const post = parseStoryJson(story);
+          if (post) posts.push(post);
+        }
+        if (posts.length > 0) return posts;
+      } catch (e) {
+        // Continue to next pattern
+      }
+    }
+  }
+  
+  // Pattern 3: Look for individual story objects with id and title
+  const storyPattern = /\{"id"\s*:\s*(\d+)[^}]*"title"\s*:\s*"([^"]+)"[^}]*\}/g;
+  let storyMatch;
+  while ((storyMatch = storyPattern.exec(html)) !== null) {
+    try {
+      // Try to parse the full object
+      const startIdx = storyMatch.index;
+      let depth = 0;
+      let endIdx = startIdx;
+      for (let i = startIdx; i < html.length; i++) {
+        if (html[i] === '{') depth++;
+        if (html[i] === '}') depth--;
+        if (depth === 0) {
+          endIdx = i + 1;
+          break;
+        }
+      }
+      const jsonStr = html.substring(startIdx, endIdx);
+      const story = JSON.parse(jsonStr);
+      const post = parseStoryJson(story);
+      if (post) posts.push(post);
+    } catch (e) {
+      // Skip invalid JSON
+    }
+  }
+  
   return posts;
 }
 
-function parseStoryObject(obj: any): Post | null {
+function parseStoryJson(obj: any): Post | null {
   if (!obj || !obj.id) return null;
 
+  // JSON.parse automatically handles \uXXXX escapes
+  const title = obj.title || 'Без названия';
+  
+  // Extract images
   const images: string[] = [];
-
-  // Extract images from various fields - ONLY content images
+  
   if (obj.images && Array.isArray(obj.images)) {
     for (const img of obj.images) {
       const url = typeof img === 'string' ? img : img.link || img.url || img.src;
       if (url && isContentImageUrl(url)) {
-        images.push(url);
+        images.push(normalizeImageUrl(url));
       }
     }
   }
-
-  // Extract from blocks if available (more reliable for content images)
+  
   if (obj.blocks && Array.isArray(obj.blocks)) {
     for (const block of obj.blocks) {
       if (block.type === 'image' && block.data?.link) {
@@ -484,18 +258,9 @@ function parseStoryObject(obj: any): Post | null {
       }
     }
   }
-
-  // Only use previewImage if it's a valid content image
+  
   if (obj.image && typeof obj.image === 'string' && isContentImageUrl(obj.image)) {
     images.push(obj.image);
-  }
-
-  if (obj.previewImage && typeof obj.previewImage === 'string' && isContentImageUrl(obj.previewImage)) {
-    images.push(obj.previewImage);
-  }
-
-  if (obj.video_gif && typeof obj.video_gif === 'string' && isContentImageUrl(obj.video_gif)) {
-    images.push(obj.video_gif);
   }
 
   // Extract tags
@@ -503,27 +268,108 @@ function parseStoryObject(obj: any): Post | null {
   if (obj.tags && Array.isArray(obj.tags)) {
     tags = obj.tags.map((t: any) => {
       const tag = typeof t === 'string' ? t : (t.name || t.tag || t.title || '');
-      return tag.toLowerCase();
+      return tag.toLowerCase().trim();
     }).filter((t: string) => t && t.length > 0);
   }
 
-  // Title is already properly decoded by JSON.parse
-  const title = obj.title || 'Без названия';
-  
-  console.log(`[Parser] Parsed story ${obj.id}: "${title.slice(0, 50)}..." tags: [${tags.slice(0, 3).join(', ')}]`);
+  console.log(`[Parser] JSON story ${obj.id}: "${title.substring(0, 40)}..." tags: [${tags.slice(0, 3).join(', ')}]`);
 
   return {
     id: String(obj.id),
     title,
     link: `https://pikabu.ru/story/${obj.story_link || obj.story_link_id || obj.id}`,
     tags,
-    images: images.map(normalizeImageUrl),
+    images: [...new Set(images)],
     rating: obj.rating || obj.up_votes || 0,
     author: (obj.author_login || obj.author || obj.user?.login || 'Unknown').toLowerCase(),
     authorName: obj.author_name || obj.author_login || obj.user?.name || undefined,
     bodyPreview: (obj.body || obj.text || obj.preview_text)?.slice(0, 500) || undefined,
     commentsCount: obj.comments_count || obj.commentsCount || obj.comments || 0,
     publishedAt: obj.timestamp || obj.created_at || obj.date || new Date().toISOString(),
+    parsedAt: new Date().toISOString(),
+  };
+}
+
+// ===== HTML PARSING (fallback) =====
+
+function parseHtmlPosts($: cheerio.CheerioAPI): Post[] {
+  const posts: Post[] = [];
+  
+  const storyElements = $('article.story, .story, article, [data-story-id]').toArray();
+  console.log(`[Parser] Found ${storyElements.length} HTML story elements`);
+  
+  for (const element of storyElements) {
+    try {
+      const post = parseHtmlStory($, element);
+      if (post) posts.push(post);
+    } catch (e) {
+      // Skip invalid stories
+    }
+  }
+  
+  return posts;
+}
+
+function parseHtmlStory($: cheerio.CheerioAPI, element: any): Post | null {
+  const $story = $(element);
+  
+  const storyId = $story.attr('data-story-id') || $story.attr('data-id') ||
+    $story.find('[data-story-id]').attr('data-story-id');
+  
+  if (!storyId) return null;
+  
+  // Title - decode HTML entities
+  let title = $story.find('.story__title, .story__title-link, h2, h3').first().text().trim();
+  title = decodeHtmlEntities(title);
+  if (!title) return null;
+  
+  // Link
+  const link = $story.find('a[href*="/story/"]').first().attr('href') || `https://pikabu.ru/story/_${storyId}`;
+  
+  // Tags from URLs (most reliable)
+  const tags: string[] = [];
+  $story.find('a[href*="/tag/"]').each((_, tagEl) => {
+    const href = $(tagEl).attr('href') || '';
+    const tagMatch = href.match(/\/tag\/([^/?]+)/);
+    if (tagMatch) {
+      const tag = decodeURIComponent(tagMatch[1]).toLowerCase().trim();
+      if (tag && !tags.includes(tag)) tags.push(tag);
+    }
+  });
+  
+  // Images
+  const images: string[] = [];
+  const $contentArea = $story.find('.story__content, .story-block, .story__body').first();
+  const $searchArea = $contentArea.length > 0 ? $contentArea : $story;
+  
+  $searchArea.find('img').each((_, imgEl) => {
+    const $img = $(imgEl);
+    const parentClass = ($img.parent().attr('class') || '').toLowerCase();
+    if (parentClass.includes('avatar') || parentClass.includes('user') || parentClass.includes('community')) {
+      return;
+    }
+    
+    const src = $img.attr('data-src') || $img.attr('src') || $img.attr('data-source');
+    if (src && isContentImageUrl(src)) {
+      images.push(normalizeImageUrl(src));
+    }
+  });
+  
+  // Author
+  const author = $story.find('.story__author, .user__nick, [class*="author"]').text().trim().toLowerCase() || 'unknown';
+  
+  console.log(`[Parser] HTML story ${storyId}: "${title.substring(0, 40)}..." tags: [${tags.slice(0, 3).join(', ')}]`);
+  
+  return {
+    id: storyId,
+    title,
+    link: link.startsWith('http') ? link : `https://pikabu.ru${link}`,
+    tags,
+    images: [...new Set(images)],
+    rating: 0,
+    author: author.replace('@', ''),
+    commentsCount: 0,
+    publishedAt: new Date().toISOString(),
     parsedAt: new Date().toISOString(),
   };
 }
