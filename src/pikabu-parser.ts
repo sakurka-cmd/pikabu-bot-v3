@@ -227,16 +227,44 @@ function parseFromJsonData($: cheerio.CheerioAPI): Post[] {
 
   $('script').each((_, scriptEl) => {
     const content = $(scriptEl).html() || '';
+    if (!content || content.length < 100) return;
 
-    const matches = content.match(/"stories"\s*:\s*(\[[\s\S]*?\])\s*[,}]/);
+    // Try different JSON patterns
+    let matches = content.match(/"stories"\s*:\s*(\[[\s\S]*?\])\s*[,}]/);
+    
+    // Alternative pattern without quotes
+    if (!matches) {
+      matches = content.match(/stories\s*:\s*(\[[\s\S]*?\])\s*[,}]/);
+    }
+    
+    // Pattern for __INITIAL_STATE__
+    if (!matches) {
+      const stateMatch = content.match(/__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*;?\s*<\/script>/);
+      if (stateMatch) {
+        try {
+          const state = JSON.parse(stateMatch[1]);
+          if (state.stories && Array.isArray(state.stories)) {
+            console.log(`[Parser] Found __INITIAL_STATE__ with ${state.stories.length} stories`);
+            for (const story of state.stories) {
+              const post = parseStoryObject(story);
+              if (post) posts.push(post);
+            }
+          }
+        } catch (e) {}
+        return;
+      }
+    }
+    
     if (matches) {
-      console.log('[Parser] Found JSON stories data in script tag');
       try {
         const stories = JSON.parse(matches[1]);
-        console.log(`[Parser] Parsed ${stories.length} stories from JSON, first story tags:`, stories[0]?.tags);
+        console.log(`[Parser] Found ${stories.length} stories in JSON`);
         for (const story of stories) {
           const post = parseStoryObject(story);
-          if (post) posts.push(post);
+          if (post) {
+            console.log(`[Parser] JSON story ${post.id} tags: [${post.tags.slice(0, 3).join(', ')}...]`);
+            posts.push(post);
+          }
         }
       } catch (e) {
         console.error('[Parser] Error parsing JSON stories:', e);
@@ -252,6 +280,7 @@ function parseStoryObject(obj: any): Post | null {
 
   const images: string[] = [];
 
+  // Extract images from various fields
   if (obj.images && Array.isArray(obj.images)) {
     images.push(...obj.images.map((img: any) =>
       typeof img === 'string' ? img : img.link || img.url || img.src
@@ -269,21 +298,36 @@ function parseStoryObject(obj: any): Post | null {
   if (obj.video_gif && typeof obj.video_gif === 'string') {
     images.push(obj.video_gif);
   }
+  
+  // Extract from blocks if available
+  if (obj.blocks && Array.isArray(obj.blocks)) {
+    for (const block of obj.blocks) {
+      if (block.type === 'image' && block.data?.link) {
+        images.push(block.data.link);
+      }
+    }
+  }
+
+  // Extract tags
+  let tags: string[] = [];
+  if (obj.tags && Array.isArray(obj.tags)) {
+    tags = obj.tags.map((t: any) =>
+      typeof t === 'string' ? t.toLowerCase() : (t.name || t.tag || t.title || '').toLowerCase()
+    ).filter((t: string) => t && t.length > 0);
+  }
 
   return {
     id: String(obj.id),
     title: obj.title || 'Без названия',
-    link: `https://pikabu.ru/story/${obj.story_link || obj.id}`,
-    tags: (obj.tags || []).map((t: any) =>
-      typeof t === 'string' ? t.toLowerCase() : (t.name || t.tag || '').toLowerCase()
-    ).filter(Boolean),
+    link: `https://pikabu.ru/story/${obj.story_link || obj.story_link_id || obj.id}`,
+    tags,
     images: images.filter(isValidImageUrl).map(normalizeImageUrl),
-    rating: obj.rating || 0,
-    author: (obj.author_login || obj.author || 'Unknown').toLowerCase(),
-    authorName: obj.author_name || obj.author_login || undefined,
-    bodyPreview: obj.body?.slice(0, 500) || undefined,
-    commentsCount: obj.comments_count || obj.commentsCount || 0,
-    publishedAt: obj.timestamp || obj.created_at || new Date().toISOString(),
+    rating: obj.rating || obj.up_votes || 0,
+    author: (obj.author_login || obj.author || obj.user?.login || 'Unknown').toLowerCase(),
+    authorName: obj.author_name || obj.author_login || obj.user?.name || undefined,
+    bodyPreview: (obj.body || obj.text || obj.preview_text)?.slice(0, 500) || undefined,
+    commentsCount: obj.comments_count || obj.commentsCount || obj.comments || 0,
+    publishedAt: obj.timestamp || obj.created_at || obj.date || new Date().toISOString(),
     parsedAt: new Date().toISOString(),
   };
 }
@@ -306,7 +350,8 @@ function isValidImageUrl(url: string): boolean {
     lower.includes('/image/') ||
     lower.includes('pikabu.ru') ||
     lower.includes('imgur') ||
-    lower.includes('i.redd.it');
+    lower.includes('i.redd.it') ||
+    lower.includes('s.pikabu');
 }
 
 function normalizeImageUrl(url: string): string {
