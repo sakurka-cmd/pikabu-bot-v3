@@ -833,46 +833,35 @@ export async function recordParseError(error: string): Promise<void> {
 export async function getDetailedStats() {
   const stats = get<any>('SELECT * FROM globalStats WHERE id = 1');
 
-  const [
-    totalUsers,
-    activeUsers,
-    blockedUsers,
-    totalTagSets,
-    activeTagSets,
-    allTagSets,
-    totalAuthorSubs,
-    postsToday,
-    postsThisWeek,
-  ] = await Promise.all([
-    all<any>('SELECT id FROM users').then(r => r.length),
-    all<any>('SELECT id FROM users WHERE isActive = 1 AND isBlocked = 0').then(r => r.length),
-    all<any>('SELECT id FROM users WHERE isBlocked = 1').then(r => r.length),
-    all<any>('SELECT id FROM tagSets').then(r => r.length),
-    all<any>('SELECT id FROM tagSets WHERE isActive = 1').then(r => r.length),
-    all<any>('SELECT includeTags, excludeTags FROM tagSets'),
-    all<any>('SELECT id FROM authorSubscriptions WHERE isActive = 1').then(r => r.length),
-    all<any>("SELECT id FROM userPosts WHERE date(sentAt) = date('now')").then(r => r.length),
-    all<any>("SELECT id FROM userPosts WHERE sentAt >= datetime('now', '-7 days')").then(r => r.length),
-  ]);
+  // All these are synchronous calls
+  const allUsers = all<any>('SELECT id FROM users');
+  const activeUsers = all<any>('SELECT id FROM users WHERE isActive = 1 AND isBlocked = 0');
+  const blockedUsers = all<any>('SELECT id FROM users WHERE isBlocked = 1');
+  const allTagSetsList = all<any>('SELECT id FROM tagSets');
+  const activeTagSetsList = all<any>('SELECT id FROM tagSets WHERE isActive = 1');
+  const allTagSetsData = all<any>('SELECT includeTags, excludeTags FROM tagSets');
+  const authorSubs = all<any>('SELECT id FROM authorSubscriptions WHERE isActive = 1');
+  const todayPosts = all<any>("SELECT id FROM userPosts WHERE date(sentAt) = date('now')");
+  const weekPosts = all<any>("SELECT id FROM userPosts WHERE sentAt >= datetime('now', '-7 days')");
 
   let totalIncludeTags = 0;
   let totalExcludeTags = 0;
 
-  for (const ts of allTagSets) {
+  for (const ts of allTagSetsData) {
     totalIncludeTags += (JSON.parse(ts.includeTags || '[]') as string[]).length;
     totalExcludeTags += (JSON.parse(ts.excludeTags || '[]') as string[]).length;
   }
 
   return {
-    users: { total: totalUsers, active: activeUsers, blocked: blockedUsers },
-    tagSets: { total: totalTagSets, active: activeTagSets },
+    users: { total: allUsers.length, active: activeUsers.length, blocked: blockedUsers.length },
+    tagSets: { total: allTagSetsList.length, active: activeTagSetsList.length },
     tags: { include: totalIncludeTags, exclude: totalExcludeTags },
-    authorSubs: totalAuthorSubs,
+    authorSubs: authorSubs.length,
     posts: {
       totalSent: stats?.totalPostsSent || 0,
       previews: stats?.totalPreviews || 0,
-      today: postsToday,
-      thisWeek: postsThisWeek,
+      today: todayPosts.length,
+      thisWeek: weekPosts.length,
     },
     parses: {
       total: stats?.totalParses || 0,
