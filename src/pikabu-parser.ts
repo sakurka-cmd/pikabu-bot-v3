@@ -61,8 +61,20 @@ export async function parsePikabu(tag?: string): Promise<ParseResult> {
       console.log(`[Parser] Using JSON data: found ${jsonPosts.length} posts`);
       posts.push(...jsonPosts.filter(p => p.images.length > 0));
     } else {
-      // Fallback to HTML parsing
-      const storyElements = $('article.story, .story').toArray();
+      // Fallback to HTML parsing - try multiple selectors
+      let storyElements = $('article.story, .story').toArray();
+      
+      // Try alternative selectors if nothing found
+      if (storyElements.length === 0) {
+        storyElements = $('article').toArray();
+      }
+      if (storyElements.length === 0) {
+        storyElements = $('[data-story-id]').toArray();
+      }
+      if (storyElements.length === 0) {
+        storyElements = $('.story__main, .story-main').toArray();
+      }
+      
       console.log(`[Parser] No JSON data, parsing ${storyElements.length} HTML story elements`);
 
       for (const element of storyElements) {
@@ -94,42 +106,49 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
 
   const storyId = $story.attr('data-story-id') ||
     $story.attr('data-id') ||
-    extractIdFromUrl($story.find('a.story__title-link').attr('href') || '');
+    $story.find('[data-story-id]').attr('data-story-id') ||
+    extractIdFromUrl($story.find('a[href*="/story/"]').attr('href') || '');
 
   if (!storyId) return null;
 
-  const title = $story.find('.story__title-link').text().trim() ||
-    $story.find('a[class*="title"]').text().trim() ||
+  const title = $story.find('.story__title, .story__title-link, a[href*="/story/"]').first().text().trim() ||
     $story.find('h2, h3').first().text().trim();
 
   if (!title) return null;
 
-  const link = $story.find('.story__title-link').attr('href') ||
-    $story.find('a[class*="title"]').attr('href') ||
+  const link = $story.find('a[href*="/story/"]').first().attr('href') ||
     `https://pikabu.ru/story/_${storyId}`;
 
-  // Tags
+  // Tags - try multiple selectors
   const tags: string[] = [];
-  $story.find('.story__tag, .tags__tag, a[class*="tag"]').each((_, tagEl) => {
+  
+  // Method 1: .story__tag
+  $story.find('.story__tag, .tags__tag').each((_, tagEl) => {
     const tag = $(tagEl).text().trim().toLowerCase();
-    if (tag) tags.push(tag);
+    if (tag && tag.length > 0 && tag.length < 50) tags.push(tag);
   });
   
-  // Debug: log raw tag elements found
+  // Method 2: a[href*="/tag/"]
   if (tags.length === 0) {
-    // Try alternative tag selectors
     $story.find('a[href*="/tag/"]').each((_, tagEl) => {
       const tag = $(tagEl).text().trim().toLowerCase();
-      if (tag && tag.length > 0 && tag.length < 50) {
-        tags.push(tag);
-      }
+      if (tag && tag.length > 0 && tag.length < 50) tags.push(tag);
+    });
+  }
+  
+  // Method 3: [class*="tag"]
+  if (tags.length === 0) {
+    $story.find('[class*="tag"]').each((_, tagEl) => {
+      const tag = $(tagEl).text().trim().toLowerCase();
+      if (tag && tag.length > 0 && tag.length < 50 && !tag.includes('\n')) tags.push(tag);
     });
   }
 
-  // Images
+  // Images - try multiple selectors
   const images: string[] = [];
 
-  $story.find('.story__content img, .story-image img, img[class*="image"]').each((_, imgEl) => {
+  // Method 1: img tags
+  $story.find('img').each((_, imgEl) => {
     const src = $(imgEl).attr('data-src') ||
       $(imgEl).attr('src') ||
       $(imgEl).attr('data-source');
@@ -138,7 +157,8 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
     }
   });
 
-  const dataImages = $story.attr('data-images');
+  // Method 2: data-images attribute
+  const dataImages = $story.attr('data-images') || $story.find('[data-images]').attr('data-images');
   if (dataImages) {
     try {
       const parsed = JSON.parse(dataImages);
@@ -147,6 +167,15 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
       }
     } catch { }
   }
+  
+  // Method 3: background-image in style
+  $story.find('[style*="background-image"]').each((_, el) => {
+    const style = $(el).attr('style') || '';
+    const match = style.match(/url\(['"]?([^'")\s]+)['"]?\)/);
+    if (match && isValidImageUrl(match[1])) {
+      images.push(normalizeImageUrl(match[1]));
+    }
+  });
 
   // Rating
   const ratingText = $story.find('.story__rating-count, .rating__count, [class*="rating"]').text().trim();
