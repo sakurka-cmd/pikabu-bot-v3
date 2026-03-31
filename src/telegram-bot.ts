@@ -76,7 +76,7 @@ Choose action:
 
     await bot.sendMessage(chatId, text, {
       parse_mode: 'Markdown',
-      reply_markup: getMainMenuKeyboard(newUser.isAdmin),
+      reply_markup: getReplyKeyboard(newUser.isAdmin),
     });
   });
 
@@ -191,12 +191,63 @@ ${authors.slice(0, 5).map(a => `@${a.author} (${a.count})`).join('\n') || '—'}
     });
   });
 
-  // Text messages
+  // Text messages (including reply keyboard buttons)
   bot.on('text', async (msg) => {
     if (msg.text?.startsWith('/')) return;
-    const dialog = await getDialogState(msg.chat.id);
+    const chatId = msg.chat.id;
+    const text = msg.text || '';
+
+    console.log(`[Bot] Text message from ${chatId}: "${text}"`);
+
+    // Check for dialog state first
+    const dialog = await getDialogState(chatId);
     if (dialog) {
-      await handleDialog(bot, msg.chat.id, dialog, msg.text || '');
+      console.log(`[Bot] Dialog state: ${dialog.state}`);
+      await handleDialog(bot, chatId, dialog, text);
+      return;
+    }
+
+    // Handle reply keyboard button texts
+    const user = await getUser(chatId);
+    if (!user) {
+      console.log(`[Bot] User ${chatId} not found`);
+      return;
+    }
+
+    // Map button texts to actions
+    switch (text) {
+      case '📦 Tag Sets':
+      case 'Tag Sets':
+        console.log(`[Bot] Showing Tag Sets for ${chatId}`);
+        await showSetsList(bot, chatId);
+        break;
+      case '👤 Author Subs':
+      case 'Author Subs':
+        console.log(`[Bot] Showing Author Subs for ${chatId}`);
+        await showAuthorsList(bot, chatId);
+        break;
+      case '📊 Statistics':
+      case 'Statistics':
+        console.log(`[Bot] Showing Statistics for ${chatId}`);
+        await showMainMenu(bot, chatId, user);
+        break;
+      case '👑 Admin Panel':
+      case 'Admin Panel':
+        if (user.isAdmin) {
+          console.log(`[Bot] Showing Admin Panel for ${chatId}`);
+          await showAdminPanel(bot, chatId);
+        }
+        break;
+      case '❓ Help':
+      case 'Help':
+        await bot.sendMessage(chatId, '📖 Use menu buttons or commands: /menu, /status, /help');
+        break;
+      case '◀️ Back':
+      case 'Back':
+        await showMainMenu(bot, chatId, user);
+        break;
+      default:
+        console.log(`[Bot] Unknown text from ${chatId}: "${text}"`);
     }
   });
 
@@ -228,6 +279,22 @@ function getMainMenuKeyboard(isAdmin: boolean): TelegramBot.InlineKeyboardMarkup
   return { inline_keyboard: buttons };
 }
 
+// Reply Keyboard (buttons at bottom of screen)
+function getReplyKeyboard(isAdmin: boolean): TelegramBot.ReplyKeyboardMarkup {
+  const buttons: TelegramBot.KeyboardButton[][] = [
+    [{ text: '📦 Tag Sets' }, { text: '👤 Author Subs' }],
+    [{ text: '📊 Statistics' }],
+  ];
+
+  if (isAdmin) {
+    buttons.push([{ text: '👑 Admin Panel' }]);
+  }
+
+  buttons.push([{ text: '❓ Help' }]);
+
+  return { keyboard: buttons, resize_keyboard: true, one_time_keyboard: false };
+}
+
 async function showMainMenu(bot: TelegramBot, chatId: number, user: UserData, msgId?: number) {
   const text = `
 🤖 *Pikabu Pic Collector*
@@ -237,16 +304,18 @@ ${user.isAdmin ? '👑 Admin\n' : ''}📦 Sets: ${user.tagSets.length}
 📤 Posts: ${user.postsReceived}
   `;
 
-  const keyboard = getMainMenuKeyboard(user.isAdmin);
+  const inlineKeyboard = getMainMenuKeyboard(user.isAdmin);
+  const replyKeyboard = getReplyKeyboard(user.isAdmin);
 
   if (msgId) {
     try {
-      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: keyboard });
+      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: inlineKeyboard });
     } catch (e) {
-      // Message may be too old
+      // Message may be too old, send new with reply keyboard
+      await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: replyKeyboard });
     }
   } else {
-    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
+    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: replyKeyboard });
   }
 }
 
@@ -259,9 +328,13 @@ async function showSetsList(bot: TelegramBot, chatId: number, msgId?: number) {
   if (user.tagSets.length === 0) {
     const text = '📭 No tag sets';
     const btns = [[{ text: '➕ Create', callback_data: 'create_set' }], [{ text: '◀️', callback_data: 'main_menu' }]];
-    try {
-      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: btns } });
-    } catch (e) {}
+    if (msgId) {
+      try {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: btns } });
+      } catch (e) {}
+    } else {
+      await bot.sendMessage(chatId, text, { reply_markup: { inline_keyboard: btns } });
+    }
     return;
   }
 
@@ -273,9 +346,13 @@ async function showSetsList(bot: TelegramBot, chatId: number, msgId?: number) {
   btns.push([{ text: '➕ Create', callback_data: 'create_set' }]);
   btns.push([{ text: '◀️', callback_data: 'main_menu' }]);
 
-  try {
-    await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-  } catch (e) {}
+  if (msgId) {
+    try {
+      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+    } catch (e) {}
+  } else {
+    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+  }
 }
 
 async function showSetDetails(bot: TelegramBot, chatId: number, setId: number, msgId?: number) {
@@ -312,9 +389,13 @@ async function showAuthorsList(bot: TelegramBot, chatId: number, msgId?: number)
   if (user.authorSubs.length === 0) {
     const text = '📭 No author subscriptions';
     const btns = [[{ text: '➕ Subscribe', callback_data: 'add_author' }], [{ text: '◀️', callback_data: 'main_menu' }]];
-    try {
-      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: btns } });
-    } catch (e) {}
+    if (msgId) {
+      try {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: btns } });
+      } catch (e) {}
+    } else {
+      await bot.sendMessage(chatId, text, { reply_markup: { inline_keyboard: btns } });
+    }
     return;
   }
 
@@ -326,9 +407,13 @@ async function showAuthorsList(bot: TelegramBot, chatId: number, msgId?: number)
   btns.push([{ text: '➕ Subscribe', callback_data: 'add_author' }]);
   btns.push([{ text: '◀️', callback_data: 'main_menu' }]);
 
-  try {
-    await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-  } catch (e) {}
+  if (msgId) {
+    try {
+      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+    } catch (e) {}
+  } else {
+    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+  }
 }
 
 async function showAuthorDetails(bot: TelegramBot, chatId: number, subId: number, msgId?: number) {
@@ -379,9 +464,13 @@ async function showAdminPanel(bot: TelegramBot, chatId: number, msgId?: number) 
     [{ text: '◀️', callback_data: 'main_menu' }],
   ];
 
-  try {
-    await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-  } catch (e) {}
+  if (msgId) {
+    try {
+      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+    } catch (e) {}
+  } else {
+    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+  }
 }
 
 async function showUsersList(bot: TelegramBot, chatId: number, page: number = 0, msgId?: number) {
