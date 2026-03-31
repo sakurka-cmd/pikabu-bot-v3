@@ -447,18 +447,25 @@ export async function getAllActiveUsers(): Promise<UserData[]> {
   const users = all<any>(
     'SELECT * FROM users WHERE isActive = 1 AND isBlocked = 0 ORDER BY joinedAt DESC'
   );
+  console.log(`[DB] Found ${users.length} active users in database`);
+  
   const result: UserData[] = [];
 
   for (const u of users) {
     const user = await getUser(Number(u.chatId));
     if (user) {
+      const allTagSetsCount = user.tagSets.length;
       // Filter active tag sets and author subs
       user.tagSets = user.tagSets.filter(ts => ts.isActive);
       user.authorSubs = user.authorSubs.filter(as => as.isActive);
-      result.push(user);
+      console.log(`[DB] User ${user.chatId}: ${allTagSetsCount} tag sets total, ${user.tagSets.length} active, ${user.tagSets.reduce((sum, ts) => sum + ts.includeTags.length, 0)} include tags`);
+      if (user.tagSets.length > 0) {
+        result.push(user);
+      }
     }
   }
 
+  console.log(`[DB] Returning ${result.length} users with active tag sets`);
   return result;
 }
 

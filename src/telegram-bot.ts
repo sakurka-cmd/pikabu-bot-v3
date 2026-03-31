@@ -872,14 +872,20 @@ async function setupAutoParsing() {
 
 export async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: number; error?: string }> {
   const users = await getAllActiveUsers();
+  console.log(`[Parsing] Active users: ${users.length}`);
 
   // Collect all tags
   const allTags = new Set<string>();
   for (const u of users) {
     for (const ts of u.tagSets) {
-      if (ts.isActive) ts.includeTags.forEach(t => allTags.add(t));
+      if (ts.isActive) {
+        ts.includeTags.forEach(t => allTags.add(t));
+        console.log(`[Parsing] User ${u.chatId}, Set "${ts.name}": include tags [${ts.includeTags.join(', ')}]`);
+      }
     }
   }
+
+  console.log(`[Parsing] Total tags to parse: ${allTags.size} -> [${Array.from(allTags).join(', ')}]`);
 
   if (allTags.size === 0) {
     return { newPosts: 0, sent: 0, error: 'No tags' };
@@ -896,13 +902,19 @@ export async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; 
     return { newPosts: 0, sent: 0, error: msg };
   }
 
+  console.log(`[Parsing] Fetched ${posts.length} posts`);
+
   let newPosts = 0;
   let sent = 0;
 
   for (const post of posts) {
-    if (await isPostSeen(post.id)) continue;
+    if (await isPostSeen(post.id)) {
+      console.log(`[Parsing] Post ${post.id} already seen, skipping`);
+      continue;
+    }
 
     newPosts++;
+    console.log(`[Parsing] New post ${post.id}: "${post.title}" by @${post.author}, tags: [${post.tags.join(', ')}]`);
 
     // Save post
     const dbPostId = await addSeenPost({
@@ -921,7 +933,10 @@ export async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; 
 
     // Process by tag sets
     for (const user of users) {
-      if (await hasUserReceivedPost(user.chatId, post.id)) continue;
+      if (await hasUserReceivedPost(user.chatId, post.id)) {
+        console.log(`[Parsing] User ${user.chatId} already received post ${post.id}`);
+        continue;
+      }
 
       for (const ts of user.tagSets) {
         if (!ts.isActive) continue;
@@ -933,7 +948,10 @@ export async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; 
           )
         );
 
-        if (hasExclude) continue;
+        if (hasExclude) {
+          console.log(`[Parsing] Post ${post.id} excluded for set "${ts.name}"`);
+          continue;
+        }
 
         // Check inclusions
         const hasInclude = post.tags.some(pt =>
@@ -942,8 +960,11 @@ export async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; 
           )
         );
 
+        console.log(`[Parsing] Post ${post.id} tags: [${post.tags.join(',')}], Set "${ts.name}" include: [${ts.includeTags.join(',')}], match: ${hasInclude}`);
+
         if (hasInclude) {
           try {
+            console.log(`[Parsing] Sending post ${post.id} to user ${user.chatId}`);
             await sendFullPost(bot, user.chatId, post, ts.name);
             await recordUserPost(user.chatId, dbPostId, false);
             await incrementUserPostsReceived(user.chatId);
@@ -960,6 +981,7 @@ export async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; 
     // Process by author subscriptions
     if (post.author) {
       const subscribers = await getSubscribersForAuthor(post.author);
+      console.log(`[Parsing] Post ${post.id} author @${post.author} has ${subscribers.length} subscribers`);
 
       for (const sub of subscribers) {
         const subData = sub.authorSubs.find(s => s.authorUsername === post.author?.toLowerCase());
@@ -967,6 +989,7 @@ export async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; 
         if (await hasUserReceivedPost(sub.chatId, post.id)) continue;
 
         try {
+          console.log(`[Parsing] Sending post ${post.id} to subscriber ${sub.chatId}`);
           if (subData.sendPreview) {
             await sendPreviewPost(bot, sub.chatId, post);
           } else {
@@ -984,6 +1007,7 @@ export async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; 
     }
   }
 
+  console.log(`[Parsing] Done: ${newPosts} new posts, ${sent} sent`);
   await incrementGlobalPostsSent(sent);
   return { newPosts, sent };
 }
