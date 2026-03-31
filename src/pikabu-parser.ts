@@ -55,24 +55,26 @@ export async function parsePikabu(tag?: string): Promise<ParseResult> {
     const $ = cheerio.load(html);
     const posts: Post[] = [];
 
-    const storyElements = $('article.story, .story').toArray();
-
-    console.log(`[Parser] Found ${storyElements.length} story elements`);
-
-    for (const element of storyElements) {
-      try {
-        const post = parseStoryElement($, element);
-        if (post && post.images.length > 0) {
-          posts.push(post);
-        }
-      } catch (e) {
-        console.error('[Parser] Error parsing story element:', e);
-      }
-    }
-
-    if (posts.length === 0) {
-      const jsonPosts = parseFromJsonData($);
+    // First try to parse from JSON data (more reliable for tags)
+    const jsonPosts = parseFromJsonData($);
+    if (jsonPosts.length > 0) {
+      console.log(`[Parser] Using JSON data: found ${jsonPosts.length} posts`);
       posts.push(...jsonPosts.filter(p => p.images.length > 0));
+    } else {
+      // Fallback to HTML parsing
+      const storyElements = $('article.story, .story').toArray();
+      console.log(`[Parser] No JSON data, parsing ${storyElements.length} HTML story elements`);
+
+      for (const element of storyElements) {
+        try {
+          const post = parseStoryElement($, element);
+          if (post && post.images.length > 0) {
+            posts.push(post);
+          }
+        } catch (e) {
+          console.error('[Parser] Error parsing story element:', e);
+        }
+      }
     }
 
     console.log(`[Parser] Parsed ${posts.length} posts with images`);
@@ -112,6 +114,17 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
     const tag = $(tagEl).text().trim().toLowerCase();
     if (tag) tags.push(tag);
   });
+  
+  // Debug: log raw tag elements found
+  if (tags.length === 0) {
+    // Try alternative tag selectors
+    $story.find('a[href*="/tag/"]').each((_, tagEl) => {
+      const tag = $(tagEl).text().trim().toLowerCase();
+      if (tag && tag.length > 0 && tag.length < 50) {
+        tags.push(tag);
+      }
+    });
+  }
 
   // Images
   const images: string[] = [];
@@ -188,8 +201,10 @@ function parseFromJsonData($: cheerio.CheerioAPI): Post[] {
 
     const matches = content.match(/"stories"\s*:\s*(\[[\s\S]*?\])\s*[,}]/);
     if (matches) {
+      console.log('[Parser] Found JSON stories data in script tag');
       try {
         const stories = JSON.parse(matches[1]);
+        console.log(`[Parser] Parsed ${stories.length} stories from JSON, first story tags:`, stories[0]?.tags);
         for (const story of stories) {
           const post = parseStoryObject(story);
           if (post) posts.push(post);
