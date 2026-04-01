@@ -23,6 +23,7 @@ export interface UserData {
   postsReceived: number;
   tagSets: TagSetData[];
   authorSubs: AuthorSubData[];
+  communitySubs: CommunitySubData[];
 }
 
 export interface TagSetData {
@@ -39,6 +40,15 @@ export interface AuthorSubData {
   id: number;
   authorUsername: string;
   authorName?: string | null;
+  isActive: boolean;
+  sendPreview: boolean;
+  createdAt: string;
+}
+
+export interface CommunitySubData {
+  id: number;
+  communityName: string;
+  communityTitle?: string | null;
   isActive: boolean;
   sendPreview: boolean;
   createdAt: string;
@@ -155,6 +165,20 @@ function createTables(): void {
       createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
       UNIQUE(userId, authorUsername)
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS communitySubscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      userId INTEGER NOT NULL,
+      communityName TEXT NOT NULL,
+      communityTitle TEXT,
+      isActive INTEGER DEFAULT 1,
+      sendPreview INTEGER DEFAULT 0,
+      createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(userId, communityName)
     )
   `);
 
@@ -339,6 +363,7 @@ export async function getUser(chatId: number): Promise<UserData | null> {
 
   const tagSets = all<any>('SELECT * FROM tagSets WHERE userId = ? ORDER BY createdAt ASC', [user.id]);
   const authorSubs = all<any>('SELECT * FROM authorSubscriptions WHERE userId = ? ORDER BY createdAt DESC', [user.id]);
+  const communitySubs = all<any>('SELECT * FROM communitySubscriptions WHERE userId = ? ORDER BY createdAt DESC', [user.id]);
 
   return {
     id: user.id,
@@ -354,6 +379,7 @@ export async function getUser(chatId: number): Promise<UserData | null> {
     postsReceived: user.postsReceived || 0,
     tagSets: tagSets.map(mapTagSet),
     authorSubs: authorSubs.map(mapAuthorSub),
+    communitySubs: communitySubs.map(mapCommunitySub),
   };
 }
 
@@ -377,6 +403,17 @@ function mapAuthorSub(as: any): AuthorSubData {
     isActive: !!as.isActive,
     sendPreview: !!as.sendPreview,
     createdAt: as.createdAt,
+  };
+}
+
+function mapCommunitySub(cs: any): CommunitySubData {
+  return {
+    id: cs.id,
+    communityName: cs.communityName,
+    communityTitle: cs.communityTitle,
+    isActive: !!cs.isActive,
+    sendPreview: !!cs.sendPreview,
+    createdAt: cs.createdAt,
   };
 }
 
@@ -686,6 +723,86 @@ export async function getSubscribersForAuthor(authorUsername: string): Promise<U
 
   const subs = all<any>(
     'SELECT userId FROM authorSubscriptions WHERE authorUsername = ? AND isActive = 1',
+    [normalized]
+  );
+
+  const result: UserData[] = [];
+  for (const sub of subs) {
+    const user = await getUserById(sub.userId);
+    if (user && !user.isBlocked) {
+      result.push(user);
+    }
+  }
+
+  return result;
+}
+
+// ===== COMMUNITY SUBSCRIPTIONS =====
+
+export async function addCommunitySubscription(
+  chatId: number,
+  communityName: string,
+  communityTitle?: string
+): Promise<{ success: boolean; error?: string }> {
+  const settings = await getSettings();
+  const user = await getUser(chatId);
+
+  if (!user) return { success: false, error: 'User not found' };
+
+  const normalized = communityName.toLowerCase().replace(/^@/, '');
+
+  if (user.communitySubs.length >= settings.maxAuthorSubs) {
+    return { success: false, error: 'Max subscriptions reached' };
+  }
+
+  if (user.communitySubs.some(s => s.communityName.toLowerCase() === normalized)) {
+    return { success: false, error: 'Already subscribed' };
+  }
+
+  try {
+    run(
+      'INSERT INTO communitySubscriptions (userId, communityName, communityTitle) VALUES (?, ?, ?)',
+      [user.id, normalized, communityTitle || null]
+    );
+    saveDatabase();
+    return { success: true };
+  } catch {
+    return { success: false, error: 'Database error' };
+  }
+}
+
+export async function removeCommunitySubscription(subId: number): Promise<void> {
+  run('DELETE FROM communitySubscriptions WHERE id = ?', [subId]);
+  saveDatabase();
+}
+
+export async function toggleCommunitySubscription(subId: number): Promise<void> {
+  const sub = get<any>('SELECT isActive FROM communitySubscriptions WHERE id = ?', [subId]);
+  if (sub) {
+    run('UPDATE communitySubscriptions SET isActive = ? WHERE id = ?', [sub.isActive ? 0 : 1, subId]);
+    saveDatabase();
+  }
+}
+
+export async function setCommunityPreviewMode(chatId: number, communityName: string, sendPreview: boolean): Promise<boolean> {
+  const normalized = communityName.toLowerCase();
+  const user = await getUser(chatId);
+  if (!user) return false;
+
+  try {
+    run('UPDATE communitySubscriptions SET sendPreview = ? WHERE userId = ? AND communityName = ?', [sendPreview ? 1 : 0, user.id, normalized]);
+    saveDatabase();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function getSubscribersForCommunity(communityName: string): Promise<UserData[]> {
+  const normalized = communityName.toLowerCase();
+
+  const subs = all<any>(
+    'SELECT userId FROM communitySubscriptions WHERE communityName = ? AND isActive = 1',
     [normalized]
   );
 
