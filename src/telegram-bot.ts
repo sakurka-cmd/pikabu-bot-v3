@@ -953,23 +953,23 @@ export async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; 
           continue;
         }
 
-        // Check inclusions - with detailed logging
-        let hasInclude = false;
-        for (const postTag of post.tags) {
-          for (const includeTag of ts.includeTags) {
+        // Check inclusions - ALL include tags must match (AND logic)
+        const matchedTags: string[] = [];
+        const hasInclude = ts.includeTags.every(includeTag => {
+          const includeTagLower = includeTag.toLowerCase();
+          const found = post.tags.some(postTag => {
             const postTagLower = postTag.toLowerCase();
-            const includeTagLower = includeTag.toLowerCase();
-            const match = postTagLower.includes(includeTagLower) || includeTagLower.includes(postTagLower);
-            if (match) {
-              console.log(`[Parsing] MATCH! Post tag "${postTag}" matches include tag "${includeTag}"`);
-              hasInclude = true;
-              break;
-            }
-          }
-          if (hasInclude) break;
+            return postTagLower.includes(includeTagLower) || includeTagLower.includes(postTagLower);
+          });
+          if (found) matchedTags.push(includeTag);
+          return found;
+        });
+
+        if (hasInclude) {
+          console.log(`[Parsing] MATCH! All include tags found: [${matchedTags.join(', ')}]`);
         }
 
-        console.log(`[Parsing] Post ${post.id} tags: [${post.tags.map(t => `"${t}"`).join(',')}], Set "${ts.name}" include: [${ts.includeTags.map(t => `"${t}"`).join(',')}], match: ${hasInclude}`);
+        console.log(`[Parsing] Post ${post.id} tags: [${post.tags.map(t => `"${t}"`).join(',')}], Set "${ts.name}" include: [${ts.includeTags.map(t => `"${t}"`).join(',')}], matched: [${matchedTags.join(', ')}], result: ${hasInclude}`);
 
         if (hasInclude) {
           try {
