@@ -12,6 +12,7 @@ RUN bun install --frozen-lockfile || bun install
 # Copy source
 COPY src ./src
 COPY tsconfig.json ./
+COPY debug-parser.ts ./
 
 # Create data directory
 RUN mkdir -p /app/data
