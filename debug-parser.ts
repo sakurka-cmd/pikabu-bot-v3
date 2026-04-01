@@ -1,5 +1,4 @@
-// Debug script to analyze Pikabu response
-const fs = require('fs');
+// Debug script to analyze Pikabu response encoding
 
 async function debug() {
   const url = 'https://pikabu.ru/tag/%D1%8E%D0%BC%D0%BE%D1%80?f=new';
@@ -28,26 +27,22 @@ async function debug() {
   const decoder = new TextDecoder('utf-8');
   const html = decoder.decode(buffer);
   
-  // Save to file
-  fs.writeFileSync('/tmp/pikabu-response.html', html);
-  console.log('Saved to /tmp/pikabu-response.html');
-  
   // Find title patterns
   const titleMatches = html.match(/"title"\s*:\s*"[^"]+"/g) || [];
   console.log('\nFound title fields:', titleMatches.length);
-  titleMatches.slice(0, 3).forEach((m, i) => console.log(`  ${i+1}. ${m}`));
+  titleMatches.slice(0, 5).forEach((m, i) => console.log(`  ${i+1}. ${m}`));
   
   // Find stories pattern
   const storiesMatch = html.match(/"stories"\s*:/);
   console.log('\nHas "stories": key:', !!storiesMatch);
   
-  // Find first 3 story titles if possible
+  // Find first 5 story titles if possible
   const storyTitlePattern = /\{"id":\d+[^}]*"title":"([^"]+)"/g;
   let match;
   let count = 0;
-  console.log('\nStory titles:');
-  while ((match = storyTitlePattern.exec(html)) !== null && count < 3) {
-    console.log(`  ${count + 1}. ${match[1].substring(0, 60)}`);
+  console.log('\nStory titles from JSON:');
+  while ((match = storyTitlePattern.exec(html)) !== null && count < 5) {
+    console.log(`  ${count + 1}. "${match[1].substring(0, 60)}"`);
     count++;
   }
   
@@ -58,6 +53,29 @@ async function debug() {
   // Check charset
   const charsetMatch = html.match(/charset=["']?([^"'\s>]+)/i);
   console.log('Charset:', charsetMatch ? charsetMatch[1] : 'not found');
+  
+  // Look for encoded titles with unicode escapes
+  const unicodeTitles = html.match(/\\u[0-9a-fA-F]{4}/g);
+  console.log('\nHas unicode escapes (\\uXXXX):', unicodeTitles ? `${unicodeTitles.length} found` : 'none');
+  
+  // Try to find and parse a story object
+  const storyObjPattern = /\{"id"\s*:\s*\d+\s*,[^{]*"title"\s*:\s*"[^"]+"\s*[^}]*\}/g;
+  const storyObjs = html.match(storyObjPattern);
+  if (storyObjs && storyObjs.length > 0) {
+    console.log('\nFound story objects:', storyObjs.length);
+    console.log('First story object (first 300 chars):', storyObjs[0].substring(0, 300));
+  }
+  
+  // Try JSON.parse on a title to see if it decodes unicode
+  if (titleMatches.length > 0) {
+    try {
+      const jsonStr = '{"title":' + titleMatches[0].split(':')[1] + '}';
+      const parsed = JSON.parse(jsonStr);
+      console.log('\nParsed title:', parsed.title);
+    } catch (e) {
+      console.log('\nFailed to parse title');
+    }
+  }
 }
 
 debug().catch(console.error);
