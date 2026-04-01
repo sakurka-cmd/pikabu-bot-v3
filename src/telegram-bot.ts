@@ -926,7 +926,27 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
   let sent = 0;
 
   for (const post of posts) {
-    if (await isPostSeen(post.id)) continue;
+    // Log matching for ALL posts (even seen ones) for debugging
+    for (const user of users) {
+      for (const ts of user.tagSets) {
+        if (!ts.isActive) continue;
+        
+        const hasAllTags = ts.includeTags.every(includeTag => {
+          const includeTagLower = includeTag.toLowerCase();
+          return post.tags.some(postTag => {
+            const postTagLower = postTag.toLowerCase();
+            return postTagLower.includes(includeTagLower) || includeTagLower.includes(postTagLower);
+          });
+        });
+        
+        console.log(`[Parsing] Post ${post.id} "${post.title.substring(0, 30)}..." tags: [${post.tags.join(',')}], need: [${ts.includeTags.join(',')}], match: ${hasAllTags}`);
+      }
+    }
+
+    if (await isPostSeen(post.id)) {
+      console.log(`[Parsing] Post ${post.id} already seen, skipping`);
+      continue;
+    }
     const dbPostId = await addSeenPost(post);
     newPosts++;
 
