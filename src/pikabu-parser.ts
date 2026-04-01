@@ -1,5 +1,5 @@
 /**
- * Pikabu Parser - Fixed encoding
+ * Pikabu Parser - Fixed for windows-1251 encoding
  */
 
 import * as cheerio from 'cheerio';
@@ -25,6 +25,103 @@ export interface ParseResult {
   posts: Post[];
   error: string | null;
   parsedAt: string;
+}
+
+// ===== WINDOWS-1251 DECODER =====
+
+// Windows-1251 to Unicode mapping for Russian characters
+const WIN1251_TO_UNICODE: Record<number, string> = {};
+// 0x80-0xFF range for windows-1251
+for (let i = 0; i < 256; i++) {
+  if (i < 0x80) {
+    WIN1251_TO_UNICODE[i] = String.fromCharCode(i);
+  } else if (i >= 0xC0 && i <= 0xFF) {
+    // Russian letters А-Яа-п (0xC0-0xEF) and р-я (0xF0-0xFF except 0xFE)
+    if (i === 0xFE) {
+      WIN1251_TO_UNICODE[i] = 'ъ'; // hard sign
+    } else {
+      WIN1251_TO_UNICODE[i] = String.fromCharCode(i + 0x350);
+    }
+  }
+}
+// Specific windows-1251 characters
+WIN1251_TO_UNICODE[0x80] = 'Ђ';
+WIN1251_TO_UNICODE[0x81] = 'Ѓ';
+WIN1251_TO_UNICODE[0x82] = '‚';
+WIN1251_TO_UNICODE[0x83] = 'ѓ';
+WIN1251_TO_UNICODE[0x84] = '„';
+WIN1251_TO_UNICODE[0x85] = '…';
+WIN1251_TO_UNICODE[0x86] = '†';
+WIN1251_TO_UNICODE[0x87] = '‡';
+WIN1251_TO_UNICODE[0x88] = '€';
+WIN1251_TO_UNICODE[0x89] = '‰';
+WIN1251_TO_UNICODE[0x8A] = 'Љ';
+WIN1251_TO_UNICODE[0x8B] = '‹';
+WIN1251_TO_UNICODE[0x8C] = 'Њ';
+WIN1251_TO_UNICODE[0x8D] = 'Ќ';
+WIN1251_TO_UNICODE[0x8E] = 'Ћ';
+WIN1251_TO_UNICODE[0x8F] = 'Џ';
+WIN1251_TO_UNICODE[0x90] = 'ђ';
+WIN1251_TO_UNICODE[0x91] = '''; 
+WIN1251_TO_UNICODE[0x92] = ''';
+WIN1251_TO_UNICODE[0x93] = '"';
+WIN1251_TO_UNICODE[0x94] = '"';
+WIN1251_TO_UNICODE[0x95] = '•';
+WIN1251_TO_UNICODE[0x96] = '–';
+WIN1251_TO_UNICODE[0x97] = '—';
+WIN1251_TO_UNICODE[0x98] = ' ';
+WIN1251_TO_UNICODE[0x99] = '™';
+WIN1251_TO_UNICODE[0x9A] = 'љ';
+WIN1251_TO_UNICODE[0x9B] = '›';
+WIN1251_TO_UNICODE[0x9C] = 'њ';
+WIN1251_TO_UNICODE[0x9D] = 'ќ';
+WIN1251_TO_UNICODE[0x9E] = 'ћ';
+WIN1251_TO_UNICODE[0x9F] = 'џ';
+WIN1251_TO_UNICODE[0xA0] = ' '; // nbsp
+WIN1251_TO_UNICODE[0xA1] = 'Ў';
+WIN1251_TO_UNICODE[0xA2] = 'ў';
+WIN1251_TO_UNICODE[0xA3] = 'Ј';
+WIN1251_TO_UNICODE[0xA4] = '¤';
+WIN1251_TO_UNICODE[0xA5] = 'Ґ';
+WIN1251_TO_UNICODE[0xA6] = '¦';
+WIN1251_TO_UNICODE[0xA7] = '§';
+WIN1251_TO_UNICODE[0xA8] = 'Ё';
+WIN1251_TO_UNICODE[0xA9] = '©';
+WIN1251_TO_UNICODE[0xAA] = 'Є';
+WIN1251_TO_UNICODE[0xAB] = '«';
+WIN1251_TO_UNICODE[0xAC] = '¬';
+WIN1251_TO_UNICODE[0xAD] = '\u00AD'; // soft hyphen
+WIN1251_TO_UNICODE[0xAE] = '®';
+WIN1251_TO_UNICODE[0xAF] = 'Ї';
+WIN1251_TO_UNICODE[0xB0] = '°';
+WIN1251_TO_UNICODE[0xB1] = '±';
+WIN1251_TO_UNICODE[0xB2] = 'І';
+WIN1251_TO_UNICODE[0xB3] = 'і';
+WIN1251_TO_UNICODE[0xB4] = 'ґ';
+WIN1251_TO_UNICODE[0xB5] = 'µ';
+WIN1251_TO_UNICODE[0xB6] = '¶';
+WIN1251_TO_UNICODE[0xB7] = '·';
+WIN1251_TO_UNICODE[0xB8] = 'ё';
+WIN1251_TO_UNICODE[0xB9] = '№';
+WIN1251_TO_UNICODE[0xBA] = 'є';
+WIN1251_TO_UNICODE[0xBB] = '»';
+WIN1251_TO_UNICODE[0xBC] = 'ј';
+WIN1251_TO_UNICODE[0xBD] = 'Ѕ';
+WIN1251_TO_UNICODE[0xBE] = 'ѕ';
+WIN1251_TO_UNICODE[0xBF] = 'ї';
+
+function decodeWindows1251(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let result = '';
+  for (let i = 0; i < bytes.length; i++) {
+    const byte = bytes[i];
+    if (byte < 0x80) {
+      result += String.fromCharCode(byte);
+    } else {
+      result += WIN1251_TO_UNICODE[byte] || '?';
+    }
+  }
+  return result;
 }
 
 // ===== IMAGE FILTERING =====
@@ -89,18 +186,13 @@ export async function parsePikabu(tag?: string): Promise<ParseResult> {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
-    // Get array buffer and decode as UTF-8
+    // Get array buffer
     const buffer = await response.arrayBuffer();
-    const decoder = new TextDecoder('utf-8');
-    const html = decoder.decode(buffer);
+    
+    // Decode as windows-1251 (Pikabu's encoding)
+    const html = decodeWindows1251(buffer);
     
     console.log(`[Parser] HTML length: ${html.length}`);
-    
-    // Debug: show first story title found
-    const titleMatch = html.match(/"title"\s*:\s*"([^"]+)"/);
-    if (titleMatch) {
-      console.log(`[Parser] First JSON title: "${titleMatch[1].substring(0, 50)}..."`);
-    }
     
     // Try to extract JSON data from the page
     const jsonPosts = extractJsonData(html);
@@ -114,7 +206,7 @@ export async function parsePikabu(tag?: string): Promise<ParseResult> {
     
     // Fallback to HTML parsing
     console.log(`[Parser] No JSON found, trying HTML parsing`);
-    const $ = cheerio.load(html, { decodeEntities: true });
+    const $ = cheerio.load(html, { decodeEntities: false });
     const posts = parseHtmlPosts($, html);
     
     console.log(`[Parser] Parsed ${posts.length} posts from HTML`);
@@ -133,7 +225,8 @@ function extractJsonData(html: string): Post[] {
   const posts: Post[] = [];
   
   // Pattern: Find stories array in script content
-  // Pikabu stores data in script tags with application/json or in inline scripts
+  // The HTML contains unicode escapes like \u044e\u043c\u043e\u0440
+  // JSON.parse will decode these automatically
   
   // Try to find the main data script
   const scriptRegex = /<script[^>]*>\s*(?:window\.__INITIAL_STATE__\s*=\s*)?(\{[\s\S]*?"stories"[\s\S]*?\})\s*<\/script>/gi;
@@ -257,9 +350,6 @@ function parseStoryJson(obj: any): Post | null {
 function parseHtmlPosts($: cheerio.CheerioAPI, rawHtml: string): Post[] {
   const posts: Post[] = [];
   
-  // First, try to extract data from data-* attributes or embedded JSON in HTML
-  // Many modern sites encode data in base64 or JSON in data attributes
-  
   const storyElements = $('article.story, .story, article, [data-story-id]').toArray();
   console.log(`[Parser] Found ${storyElements.length} HTML story elements`);
   
@@ -313,17 +403,6 @@ function parseHtmlStory($: cheerio.CheerioAPI, element: any, rawHtml: string): P
   // Fallback: extract from HTML (tags from URLs are reliable)
   let title = $story.find('.story__title, .story__title-link, h2, h3').first().text().trim();
   if (!title) return null;
-  
-  // Title might be encoded - try to decode
-  try {
-    // Try decoding as if it's HTML entities
-    title = title.replace(/&#x([0-9a-fA-F]+);/gi, (_, hex) => 
-      String.fromCharCode(parseInt(hex, 16))
-    );
-    title = title.replace(/&#(\d+);/g, (_, num) => 
-      String.fromCharCode(parseInt(num, 10))
-    );
-  } catch {}
   
   const link = $story.find('a[href*="/story/"]').first().attr('href') || `https://pikabu.ru/story/_${storyId}`;
   
