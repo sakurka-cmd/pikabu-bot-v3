@@ -7,74 +7,74 @@ for (let i = 0; i < 256; i++) {
     WIN1251_TO_UNICODE[i] = String.fromCharCode(i);
   }
 }
-WIN1251_TO_UNICODE[0x80] = 'Ђ';
-WIN1251_TO_UNICODE[0x81] = 'Ѓ';
-WIN1251_TO_UNICODE[0x82] = '‚';
-WIN1251_TO_UNICODE[0x83] = 'ѓ';
-WIN1251_TO_UNICODE[0x84] = '„';
-WIN1251_TO_UNICODE[0x85] = '…';
-WIN1251_TO_UNICODE[0x86] = '†';
-WIN1251_TO_UNICODE[0x87] = '‡';
-WIN1251_TO_UNICODE[0x88] = '€';
-WIN1251_TO_UNICODE[0x89] = '‰';
-WIN1251_TO_UNICODE[0x8A] = 'Љ';
-WIN1251_TO_UNICODE[0x8B] = '‹';
-WIN1251_TO_UNICODE[0x8C] = 'Њ';
-WIN1251_TO_UNICODE[0x8D] = 'Ќ';
-WIN1251_TO_UNICODE[0x8E] = 'Ћ';
-WIN1251_TO_UNICODE[0x8F] = 'Џ';
-WIN1251_TO_UNICODE[0x90] = 'ђ';
-WIN1251_TO_UNICODE[0x91] = '''; 
-WIN1251_TO_UNICODE[0x92] = ''';
-WIN1251_TO_UNICODE[0x93] = '"';
-WIN1251_TO_UNICODE[0x94] = '"';
-WIN1251_TO_UNICODE[0x95] = '•';
-WIN1251_TO_UNICODE[0x96] = '–';
-WIN1251_TO_UNICODE[0x97] = '—';
-WIN1251_TO_UNICODE[0x98] = ' ';
-WIN1251_TO_UNICODE[0x99] = '™';
-WIN1251_TO_UNICODE[0x9A] = 'љ';
-WIN1251_TO_UNICODE[0x9B] = '›';
-WIN1251_TO_UNICODE[0x9C] = 'њ';
-WIN1251_TO_UNICODE[0x9D] = 'ќ';
-WIN1251_TO_UNICODE[0x9E] = 'ћ';
-WIN1251_TO_UNICODE[0x9F] = 'џ';
-WIN1251_TO_UNICODE[0xA0] = ' ';
-WIN1251_TO_UNICODE[0xA1] = 'Ў';
-WIN1251_TO_UNICODE[0xA2] = 'ў';
-WIN1251_TO_UNICODE[0xA3] = 'Ј';
-WIN1251_TO_UNICODE[0xA4] = '¤';
-WIN1251_TO_UNICODE[0xA5] = 'Ґ';
-WIN1251_TO_UNICODE[0xA6] = '¦';
-WIN1251_TO_UNICODE[0xA7] = '§';
-WIN1251_TO_UNICODE[0xA8] = 'Ё';
-WIN1251_TO_UNICODE[0xA9] = '©';
-WIN1251_TO_UNICODE[0xAA] = 'Є';
-WIN1251_TO_UNICODE[0xAB] = '«';
-WIN1251_TO_UNICODE[0xAC] = '¬';
+WIN1251_TO_UNICODE[0x80] = '\u0402';
+WIN1251_TO_UNICODE[0x81] = '\u0403';
+WIN1251_TO_UNICODE[0x82] = '\u201A';
+WIN1251_TO_UNICODE[0x83] = '\u0453';
+WIN1251_TO_UNICODE[0x84] = '\u201E';
+WIN1251_TO_UNICODE[0x85] = '\u2026';
+WIN1251_TO_UNICODE[0x86] = '\u2020';
+WIN1251_TO_UNICODE[0x87] = '\u2021';
+WIN1251_TO_UNICODE[0x88] = '\u20AC';
+WIN1251_TO_UNICODE[0x89] = '\u2030';
+WIN1251_TO_UNICODE[0x8A] = '\u0409';
+WIN1251_TO_UNICODE[0x8B] = '\u2039';
+WIN1251_TO_UNICODE[0x8C] = '\u040A';
+WIN1251_TO_UNICODE[0x8D] = '\u040C';
+WIN1251_TO_UNICODE[0x8E] = '\u040B';
+WIN1251_TO_UNICODE[0x8F] = '\u040F';
+WIN1251_TO_UNICODE[0x90] = '\u0452';
+WIN1251_TO_UNICODE[0x91] = '\u2018';
+WIN1251_TO_UNICODE[0x92] = '\u2019';
+WIN1251_TO_UNICODE[0x93] = '\u201C';
+WIN1251_TO_UNICODE[0x94] = '\u201D';
+WIN1251_TO_UNICODE[0x95] = '\u2022';
+WIN1251_TO_UNICODE[0x96] = '\u2013';
+WIN1251_TO_UNICODE[0x97] = '\u2014';
+WIN1251_TO_UNICODE[0x98] = '\u00A0';
+WIN1251_TO_UNICODE[0x99] = '\u2122';
+WIN1251_TO_UNICODE[0x9A] = '\u0459';
+WIN1251_TO_UNICODE[0x9B] = '\u203A';
+WIN1251_TO_UNICODE[0x9C] = '\u045A';
+WIN1251_TO_UNICODE[0x9D] = '\u045C';
+WIN1251_TO_UNICODE[0x9E] = '\u045B';
+WIN1251_TO_UNICODE[0x9F] = '\u045F';
+WIN1251_TO_UNICODE[0xA0] = '\u00A0';
+WIN1251_TO_UNICODE[0xA1] = '\u040E';
+WIN1251_TO_UNICODE[0xA2] = '\u045E';
+WIN1251_TO_UNICODE[0xA3] = '\u0408';
+WIN1251_TO_UNICODE[0xA4] = '\u00A4';
+WIN1251_TO_UNICODE[0xA5] = '\u0490';
+WIN1251_TO_UNICODE[0xA6] = '\u00A6';
+WIN1251_TO_UNICODE[0xA7] = '\u00A7';
+WIN1251_TO_UNICODE[0xA8] = '\u0401';
+WIN1251_TO_UNICODE[0xA9] = '\u00A9';
+WIN1251_TO_UNICODE[0xAA] = '\u0404';
+WIN1251_TO_UNICODE[0xAB] = '\u00AB';
+WIN1251_TO_UNICODE[0xAC] = '\u00AC';
 WIN1251_TO_UNICODE[0xAD] = '\u00AD';
-WIN1251_TO_UNICODE[0xAE] = '®';
-WIN1251_TO_UNICODE[0xAF] = 'Ї';
-WIN1251_TO_UNICODE[0xB0] = '°';
-WIN1251_TO_UNICODE[0xB1] = '±';
-WIN1251_TO_UNICODE[0xB2] = 'І';
-WIN1251_TO_UNICODE[0xB3] = 'і';
-WIN1251_TO_UNICODE[0xB4] = 'ґ';
-WIN1251_TO_UNICODE[0xB5] = 'µ';
-WIN1251_TO_UNICODE[0xB6] = '¶';
-WIN1251_TO_UNICODE[0xB7] = '·';
-WIN1251_TO_UNICODE[0xB8] = 'ё';
-WIN1251_TO_UNICODE[0xB9] = '№';
-WIN1251_TO_UNICODE[0xBA] = 'є';
-WIN1251_TO_UNICODE[0xBB] = '»';
-WIN1251_TO_UNICODE[0xBC] = 'ј';
-WIN1251_TO_UNICODE[0xBD] = 'Ѕ';
-WIN1251_TO_UNICODE[0xBE] = 'ѕ';
-WIN1251_TO_UNICODE[0xBF] = 'ї';
-// Russian letters
+WIN1251_TO_UNICODE[0xAE] = '\u00AE';
+WIN1251_TO_UNICODE[0xAF] = '\u0407';
+WIN1251_TO_UNICODE[0xB0] = '\u00B0';
+WIN1251_TO_UNICODE[0xB1] = '\u00B1';
+WIN1251_TO_UNICODE[0xB2] = '\u0406';
+WIN1251_TO_UNICODE[0xB3] = '\u0456';
+WIN1251_TO_UNICODE[0xB4] = '\u0491';
+WIN1251_TO_UNICODE[0xB5] = '\u00B5';
+WIN1251_TO_UNICODE[0xB6] = '\u00B6';
+WIN1251_TO_UNICODE[0xB7] = '\u00B7';
+WIN1251_TO_UNICODE[0xB8] = '\u0451';
+WIN1251_TO_UNICODE[0xB9] = '\u2116';
+WIN1251_TO_UNICODE[0xBA] = '\u0454';
+WIN1251_TO_UNICODE[0xBB] = '\u00BB';
+WIN1251_TO_UNICODE[0xBC] = '\u0458';
+WIN1251_TO_UNICODE[0xBD] = '\u0405';
+WIN1251_TO_UNICODE[0xBE] = '\u0455';
+WIN1251_TO_UNICODE[0xBF] = '\u0457';
+// Russian letters (0xC0-0xFF)
 for (let i = 0xC0; i <= 0xFF; i++) {
   if (i === 0xFE) {
-    WIN1251_TO_UNICODE[i] = 'ъ';
+    WIN1251_TO_UNICODE[i] = '\u044A'; // ъ
   } else {
     WIN1251_TO_UNICODE[i] = String.fromCharCode(i + 0x350);
   }
@@ -123,7 +123,7 @@ async function debug() {
   // Find title patterns in JSON
   const titleMatches = html.match(/"title"\s*:\s*"[^"]+"/g) || [];
   console.log('\nFound title fields:', titleMatches.length);
-  titleMatches.slice(0, 5).forEach((m, i) => console.log(`  ${i+1}. ${m}`));
+  titleMatches.slice(0, 5).forEach((m, i) => console.log('  ' + (i+1) + '. ' + m));
   
   // Find stories pattern
   const storiesMatch = html.match(/"stories"\s*:/);
@@ -135,7 +135,7 @@ async function debug() {
   let count = 0;
   console.log('\nStory titles from JSON:');
   while ((match = storyTitlePattern.exec(html)) !== null && count < 5) {
-    console.log(`  ${count + 1}. [${match[1]}] "${match[2].substring(0, 60)}"`);
+    console.log('  ' + (count + 1) + '. [' + match[1] + '] "' + match[2].substring(0, 60) + '"');
     count++;
   }
   
