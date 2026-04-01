@@ -373,6 +373,7 @@ async function showSetDetails(bot: TelegramBot, chatId: number, setId: number, m
       { text: '➖ Тег искл.', callback_data: `reme_${setId}` },
     ],
     [{ text: '🗑 Удалить', callback_data: `del_${setId}` }],
+    [{ text: '◀️ Назад', callback_data: 'back_sets' }],
   ];
 
   try {
@@ -428,6 +429,7 @@ async function showAuthorDetails(bot: TelegramBot, chatId: number, subId: number
     [{ text: as.isActive ? '⏸ Выкл' : '▶️ Вкл', callback_data: `atgl_${subId}` }],
     [{ text: as.sendPreview ? '🖼 Превью: вкл' : '🖼 Превью: выкл', callback_data: `aprv_${subId}` }],
     [{ text: '🗑 Удалить', callback_data: `adel_${subId}` }],
+    [{ text: '◀️ Назад', callback_data: 'back_authors' }],
   ];
 
   try {
@@ -486,6 +488,7 @@ async function showCommunityDetails(bot: TelegramBot, chatId: number, subId: num
     [{ text: cs.isActive ? '⏸ Выкл' : '▶️ Вкл', callback_data: `ctgl_${subId}` }],
     [{ text: cs.sendPreview ? '🖼 Превью: вкл' : '🖼 Превью: выкл', callback_data: `cprv_${subId}` }],
     [{ text: '🗑 Удалить', callback_data: `cdel_${subId}` }],
+    [{ text: '◀️ Назад', callback_data: 'back_communities' }],
   ];
 
   try {
@@ -799,6 +802,22 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
   // Cancel action
   if (data === 'cancel') {
     await bot.deleteMessage(chatId, msgId);
+    return;
+  }
+
+  // Back navigation
+  if (data === 'back_sets') {
+    await showSetsList(bot, chatId);
+    return;
+  }
+
+  if (data === 'back_authors') {
+    await showAuthorsList(bot, chatId);
+    return;
+  }
+
+  if (data === 'back_communities') {
+    await showCommunitiesList(bot, chatId);
     return;
   }
 
