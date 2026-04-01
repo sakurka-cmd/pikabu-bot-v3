@@ -70,14 +70,12 @@ function setupHandlers(bot: TelegramBot) {
 
 Бот отслеживает посты на Pikabu по вашим тегам и авторам.
 
-${newUser.isAdmin ? '👑 *Вы — администратор*' : ''}
-
-Выберите действие:
+${newUser.isAdmin ? '👑 *Вы — администратор*\n' : ''}Используйте кнопки внизу экрана для навигации.
     `;
 
     await bot.sendMessage(chatId, text, {
       parse_mode: 'Markdown',
-      reply_markup: getMainMenuKeyboard(newUser.isAdmin),
+      reply_markup: getReplyKeyboard(newUser.isAdmin),
     });
   });
 
@@ -193,12 +191,44 @@ ${authors.slice(0, 5).map(a => `@${a.author} (${a.count})`).join('\n') || '—'}
     });
   });
 
-  // Текстовые сообщения - только для диалогов
+  // Текстовые сообщения - reply кнопки и диалоги
   bot.on('text', async (msg) => {
     if (msg.text?.startsWith('/')) return;
-    const dialog = await getDialogState(msg.chat.id);
+    const chatId = msg.chat.id;
+    const text = msg.text || '';
+
+    // Сначала проверяем диалоги
+    const dialog = await getDialogState(chatId);
     if (dialog) {
-      await handleDialog(bot, msg.chat.id, dialog, msg.text || '');
+      await handleDialog(bot, chatId, dialog, text);
+      return;
+    }
+
+    // Обработка reply кнопок
+    const user = await getUser(chatId);
+    if (!user) return;
+
+    switch (text) {
+      case '📦 Наборы тегов':
+        await showSetsList(bot, chatId);
+        break;
+      case '👤 Подписки на авторов':
+        await showAuthorsList(bot, chatId);
+        break;
+      case '👥 Подписки на сообщества':
+        await showCommunitiesList(bot, chatId);
+        break;
+      case '📊 Статистика':
+        await showUserStats(bot, chatId, user);
+        break;
+      case '👑 Админ-панель':
+        if (user.isAdmin) {
+          await showAdminPanel(bot, chatId);
+        }
+        break;
+      default:
+        // Неизвестный текст - показываем меню
+        await showMainMenu(bot, chatId, user);
     }
   });
 
@@ -214,19 +244,27 @@ ${authors.slice(0, 5).map(a => `@${a.author} (${a.count})`).join('\n') || '—'}
 
 // ===== МЕНЮ =====
 
-function getMainMenuKeyboard(isAdmin: boolean): TelegramBot.InlineKeyboardMarkup {
-  const buttons: TelegramBot.InlineKeyboardButton[][] = [
-    [{ text: '📦 Наборы тегов', callback_data: 'list_sets' }],
-    [{ text: '👤 Подписки на авторов', callback_data: 'list_authors' }],
-    [{ text: '👥 Подписки на сообщества', callback_data: 'list_communities' }],
-    [{ text: '📊 Статистика', callback_data: 'status' }],
+// Reply Keyboard - всегда видимые кнопки внизу экрана
+function getReplyKeyboard(isAdmin: boolean): TelegramBot.ReplyKeyboardMarkup {
+  const buttons: TelegramBot.KeyboardButton[][] = [
+    [{ text: '📦 Наборы тегов' }, { text: '👤 Подписки на авторов' }],
+    [{ text: '👥 Подписки на сообщества' }, { text: '📊 Статистика' }],
   ];
+
+  if (isAdmin) {
+    buttons.push([{ text: '👑 Админ-панель' }]);
+  }
+
+  return { keyboard: buttons, resize_keyboard: true, one_time_keyboard: false };
+}
+
+// Inline Keyboard - для дополнительных действий
+function getMainMenuInline(isAdmin: boolean): TelegramBot.InlineKeyboardMarkup {
+  const buttons: TelegramBot.InlineKeyboardButton[][] = [];
 
   if (isAdmin) {
     buttons.push([{ text: '👑 Админ-панель', callback_data: 'admin_panel' }]);
   }
-
-  buttons.push([{ text: '❓ Помощь', callback_data: 'help' }]);
 
   return { inline_keyboard: buttons };
 }
@@ -237,21 +275,51 @@ async function showMainMenu(bot: TelegramBot, chatId: number, user: UserData, ms
 
 ${user.isAdmin ? '👑 Администратор\n' : ''}📦 Наборов: ${user.tagSets.length}
 👤 Подписок: ${user.authorSubs.length}
+👥 Сообществ: ${user.communitySubs?.length || 0}
 📤 Постов: ${user.postsReceived}
   `;
 
-  const keyboard = getMainMenuKeyboard(user.isAdmin);
+  // Всегда отправляем новое сообщение с reply keyboard
+  await bot.sendMessage(chatId, text, {
+    parse_mode: 'Markdown',
+    reply_markup: getReplyKeyboard(user.isAdmin)
+  });
+}
 
-  if (msgId) {
-    try {
-      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: keyboard });
-    } catch (e) {
-      // Message too old, send new
-      await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
-    }
+// Показать статистику пользователя
+async function showUserStats(bot: TelegramBot, chatId: number, user: UserData) {
+  let text: string;
+  
+  if (!user.isAdmin) {
+    text = `
+📊 *Ваша статистика*
+
+📦 Наборов: ${user.tagSets.length} (активных: ${user.tagSets.filter(t => t.isActive).length})
+👤 Подписок на авторов: ${user.authorSubs.length}
+👥 Подписок на сообщества: ${user.communitySubs?.length || 0}
+📤 Постов получено: ${user.postsReceived}
+    `;
   } else {
-    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
+    const stats = await getDetailedStats();
+    const authors = await getPopularAuthors();
+    
+    text = `
+👑 *Статистика админа*
+
+👥 Пользователей: ${stats.users.total} (активных: ${stats.users.active})
+📦 Наборов: ${stats.tagSets.total} (активных: ${stats.tagSets.active})
+👤 Подписок: ${stats.authorSubs}
+📬 Постов: ${stats.posts.totalSent}
+
+🔥 *Популярные авторы:*
+${authors.slice(0, 5).map(a => `@${a.author} (${a.count})`).join('\n') || '—'}
+    `;
   }
+  
+  await bot.sendMessage(chatId, text, {
+    parse_mode: 'Markdown',
+    reply_markup: getReplyKeyboard(user.isAdmin)
+  });
 }
 
 // ===== НАБОРЫ ТЕГОВ =====
@@ -261,33 +329,26 @@ async function showSetsList(bot: TelegramBot, chatId: number, msgId?: number) {
   if (!user) return;
 
   if (user.tagSets.length === 0) {
-    const text = '📭 Нет наборов';
-    const btns = [[{ text: '➕ Создать', callback_data: 'create_set' }], [{ text: '◀️', callback_data: 'main_menu' }]];
-    if (msgId) {
-      try {
-        await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: btns } });
-      } catch (e) {}
-    } else {
-      await bot.sendMessage(chatId, text, { reply_markup: { inline_keyboard: btns } });
-    }
+    const text = '📭 *Нет наборов тегов*\n\nНажмите кнопку ниже, чтобы создать первый набор.';
+    const btns = [[{ text: '➕ Создать набор', callback_data: 'create_set' }]];
+    await bot.sendMessage(chatId, text, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: btns }
+    });
     return;
   }
 
-  const text = `📦 *Ваши наборы:*`;
+  const text = `📦 *Ваши наборы тегов:*\n\nВыберите набор для редактирования:`;
   const btns: TelegramBot.InlineKeyboardButton[][] = user.tagSets.map(ts => [{
     text: `${ts.isActive ? '✅' : '⏸'} ${ts.name}`,
     callback_data: `set_${ts.id}`,
   }]);
-  btns.push([{ text: '➕ Создать', callback_data: 'create_set' }]);
-  btns.push([{ text: '◀️', callback_data: 'main_menu' }]);
+  btns.push([{ text: '➕ Создать набор', callback_data: 'create_set' }]);
 
-  if (msgId) {
-    try {
-      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-    } catch (e) {}
-  } else {
-    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-  }
+  await bot.sendMessage(chatId, text, {
+    parse_mode: 'Markdown',
+    reply_markup: { inline_keyboard: btns }
+  });
 }
 
 async function showSetDetails(bot: TelegramBot, chatId: number, setId: number, msgId?: number) {
@@ -312,14 +373,11 @@ async function showSetDetails(bot: TelegramBot, chatId: number, setId: number, m
       { text: '➖ Тег искл.', callback_data: `reme_${setId}` },
     ],
     [{ text: '🗑 Удалить', callback_data: `del_${setId}` }],
-    [{ text: '◀️', callback_data: 'list_sets' }],
   ];
 
-  if (msgId) {
-    try {
-      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-    } catch (e) {}
-  } else {
+  try {
+    await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+  } catch (e) {
     await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
   }
 }
@@ -331,33 +389,26 @@ async function showAuthorsList(bot: TelegramBot, chatId: number, msgId?: number)
   if (!user) return;
 
   if (user.authorSubs.length === 0) {
-    const text = '📭 Нет подписок';
-    const btns = [[{ text: '➕ Добавить', callback_data: 'add_author' }], [{ text: '◀️', callback_data: 'main_menu' }]];
-    if (msgId) {
-      try {
-        await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: btns } });
-      } catch (e) {}
-    } else {
-      await bot.sendMessage(chatId, text, { reply_markup: { inline_keyboard: btns } });
-    }
+    const text = '📭 *Нет подписок на авторов*\n\nНажмите кнопку ниже, чтобы добавить первую подписку.';
+    const btns = [[{ text: '➕ Добавить автора', callback_data: 'add_author' }]];
+    await bot.sendMessage(chatId, text, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: btns }
+    });
     return;
   }
 
-  const text = `👤 *Подписки:*`;
+  const text = `👤 *Подписки на авторов:*\n\nВыберите подписку для управления:`;
   const btns: TelegramBot.InlineKeyboardButton[][] = user.authorSubs.map(as => [{
     text: `${as.isActive ? '✅' : '⏸'} @${as.authorUsername}`,
     callback_data: `auth_${as.id}`,
   }]);
-  btns.push([{ text: '➕ Добавить', callback_data: 'add_author' }]);
-  btns.push([{ text: '◀️', callback_data: 'main_menu' }]);
+  btns.push([{ text: '➕ Добавить автора', callback_data: 'add_author' }]);
 
-  if (msgId) {
-    try {
-      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-    } catch (e) {}
-  } else {
-    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-  }
+  await bot.sendMessage(chatId, text, {
+    parse_mode: 'Markdown',
+    reply_markup: { inline_keyboard: btns }
+  });
 }
 
 async function showAuthorDetails(bot: TelegramBot, chatId: number, subId: number, msgId?: number) {
@@ -377,15 +428,11 @@ async function showAuthorDetails(bot: TelegramBot, chatId: number, subId: number
     [{ text: as.isActive ? '⏸ Выкл' : '▶️ Вкл', callback_data: `atgl_${subId}` }],
     [{ text: as.sendPreview ? '🖼 Превью: вкл' : '🖼 Превью: выкл', callback_data: `aprv_${subId}` }],
     [{ text: '🗑 Удалить', callback_data: `adel_${subId}` }],
-    [{ text: '◀️', callback_data: 'list_authors' }],
-    [{ text: '👥 Подписки на сообщества', callback_data: 'list_communities' }],
   ];
 
-  if (msgId) {
-    try {
-      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-    } catch (e) {}
-  } else {
+  try {
+    await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+  } catch (e) {
     await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
   }
 }
@@ -398,36 +445,28 @@ async function showCommunitiesList(bot: TelegramBot, chatId: number, msgId?: num
   if (!user) return;
 
   if (!user.communitySubs || user.communitySubs.length === 0) {
-    const text = '📭 Нет подписок на сообщества';
+    const text = '📭 *Нет подписок на сообщества*\n\nНажмите кнопку ниже, чтобы добавить первую подписку.';
     const btns: TelegramBot.InlineKeyboardButton[][] = [
-      [{ text: '➕ Добавить', callback_data: 'add_community' }],
-      [{ text: '◀️', callback_data: 'main_menu' }],
+      [{ text: '➕ Добавить сообщество', callback_data: 'add_community' }],
     ];
-    if (msgId) {
-      try {
-        await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: btns } });
-      } catch (e) {}
-    } else {
-      await bot.sendMessage(chatId, text, { reply_markup: { inline_keyboard: btns } });
-    }
+    await bot.sendMessage(chatId, text, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: btns }
+    });
     return;
   }
 
-  const text = `👥 *Подписки на сообщества:*`;
+  const text = `👥 *Подписки на сообщества:*\n\nВыберите подписку для управления:`;
   const btns: TelegramBot.InlineKeyboardButton[][] = user.communitySubs.map(cs => [{
     text: `${cs.isActive ? '✅' : '⏸'} @${cs.communityName}`,
     callback_data: `comm_${cs.id}`,
   }]);
-  btns.push([{ text: '➕ Добавить', callback_data: 'add_community' }]);
-  btns.push([{ text: '◀️', callback_data: 'main_menu' }]);
+  btns.push([{ text: '➕ Добавить сообщество', callback_data: 'add_community' }]);
 
-  if (msgId) {
-    try {
-      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-    } catch (e) {}
-  } else {
-    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-  }
+  await bot.sendMessage(chatId, text, {
+    parse_mode: 'Markdown',
+    reply_markup: { inline_keyboard: btns }
+  });
 }
 
 async function showCommunityDetails(bot: TelegramBot, chatId: number, subId: number, msgId?: number) {
@@ -447,14 +486,11 @@ async function showCommunityDetails(bot: TelegramBot, chatId: number, subId: num
     [{ text: cs.isActive ? '⏸ Выкл' : '▶️ Вкл', callback_data: `ctgl_${subId}` }],
     [{ text: cs.sendPreview ? '🖼 Превью: вкл' : '🖼 Превью: выкл', callback_data: `cprv_${subId}` }],
     [{ text: '🗑 Удалить', callback_data: `cdel_${subId}` }],
-    [{ text: '◀️', callback_data: 'list_communities' }],
   ];
 
-  if (msgId) {
-    try {
-      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-    } catch (e) {}
-  } else {
+  try {
+    await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+  } catch (e) {
     await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
   }
 }
@@ -476,16 +512,12 @@ async function showAdminPanel(bot: TelegramBot, chatId: number, msgId?: number) 
   const btns: TelegramBot.InlineKeyboardButton[][] = [
     [{ text: '👥 Пользователи', callback_data: 'adm_users' }],
     [{ text: '🔄 Парсинг', callback_data: 'adm_parse' }],
-    [{ text: '◀️', callback_data: 'main_menu' }],
   ];
 
-  if (msgId) {
-    try {
-      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-    } catch (e) {}
-  } else {
-    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-  }
+  await bot.sendMessage(chatId, text, {
+    parse_mode: 'Markdown',
+    reply_markup: { inline_keyboard: btns }
+  });
 }
 
 async function showUsersList(bot: TelegramBot, chatId: number, page: number = 0, msgId?: number) {
@@ -504,13 +536,10 @@ async function showUsersList(bot: TelegramBot, chatId: number, page: number = 0,
   if (page > 0) nav.push({ text: '◀️', callback_data: `adm_us_${page - 1}` });
   if (page < totalPages - 1) nav.push({ text: '▶️', callback_data: `adm_us_${page + 1}` });
   if (nav.length > 0) btns.push(nav);
-  btns.push([{ text: '◀️', callback_data: 'admin_panel' }]);
 
-  if (msgId) {
-    try {
-      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-    } catch (e) {}
-  } else {
+  try {
+    await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+  } catch (e) {
     await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
   }
 }
@@ -533,14 +562,11 @@ Username: @${user.username || '—'}
 
   const btns: TelegramBot.InlineKeyboardButton[][] = [
     [{ text: user.isBlocked ? '🔓 Разблокировать' : '🔒 Заблокировать', callback_data: user.isBlocked ? `adm_ub_${targetId}` : `adm_b_${targetId}` }],
-    [{ text: '◀️', callback_data: 'adm_users' }],
   ];
 
-  if (msgId) {
-    try {
-      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-    } catch (e) {}
-  } else {
+  try {
+    await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+  } catch (e) {
     await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
   }
 }
@@ -628,23 +654,12 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
   const user = await getUser(chatId);
   if (!user) return;
 
-  // Main menu
-  if (data === 'main_menu') {
-    await showMainMenu(bot, chatId, user, msgId);
-    return;
-  }
-
   // Tag Sets
-  if (data === 'list_sets') {
-    await showSetsList(bot, chatId, msgId);
-    return;
-  }
-
   if (data === 'create_set') {
     await setDialogState(chatId, 'new_set', {});
     await bot.editMessageText('📝 Название набора:', {
       chat_id: chatId, message_id: msgId,
-      reply_markup: { inline_keyboard: [[{ text: '❌', callback_data: 'list_sets' }]] },
+      reply_markup: { inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'cancel' }]] },
     });
     return;
   }
@@ -665,7 +680,7 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
     await setDialogState(chatId, 'add_include', { setId: parseInt(data.split('_')[1]) });
     await bot.editMessageText('✅ Тег отбора:', {
       chat_id: chatId, message_id: msgId,
-      reply_markup: { inline_keyboard: [[{ text: '❌', callback_data: `set_${data.split('_')[1]}` }]] },
+      reply_markup: { inline_keyboard: [[{ text: '❌ Отмена', callback_data: `set_${data.split('_')[1]}` }]] },
     });
     return;
   }
@@ -674,7 +689,7 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
     await setDialogState(chatId, 'add_exclude', { setId: parseInt(data.split('_')[1]) });
     await bot.editMessageText('🚫 Тег исключения:', {
       chat_id: chatId, message_id: msgId,
-      reply_markup: { inline_keyboard: [[{ text: '❌', callback_data: `set_${data.split('_')[1]}` }]] },
+      reply_markup: { inline_keyboard: [[{ text: '❌ Отмена', callback_data: `set_${data.split('_')[1]}` }]] },
     });
     return;
   }
@@ -685,7 +700,7 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
       await setDialogState(chatId, 'remove_include', { setId: ts.id });
       await bot.editMessageText(`➖ Тег отбора для удаления:\n${ts.includeTags.map(t => '#' + t).join(', ')}`, {
         chat_id: chatId, message_id: msgId,
-        reply_markup: { inline_keyboard: [[{ text: '❌', callback_data: `set_${ts.id}` }]] },
+        reply_markup: { inline_keyboard: [[{ text: '❌ Отмена', callback_data: `set_${ts.id}` }]] },
       });
     }
     return;
@@ -697,7 +712,7 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
       await setDialogState(chatId, 'remove_exclude', { setId: ts.id });
       await bot.editMessageText(`➖ Тег исключения для удаления:\n${ts.excludeTags.map(t => '#' + t).join(', ')}`, {
         chat_id: chatId, message_id: msgId,
-        reply_markup: { inline_keyboard: [[{ text: '❌', callback_data: `set_${ts.id}` }]] },
+        reply_markup: { inline_keyboard: [[{ text: '❌ Отмена', callback_data: `set_${ts.id}` }]] },
       });
     }
     return;
@@ -705,21 +720,16 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
 
   if (data.startsWith('del_')) {
     await deleteTagSet(parseInt(data.split('_')[1]));
-    await showSetsList(bot, chatId, msgId);
+    await showSetsList(bot, chatId);
     return;
   }
 
   // Author subscriptions
-  if (data === 'list_authors') {
-    await showAuthorsList(bot, chatId, msgId);
-    return;
-  }
-
   if (data === 'add_author') {
     await setDialogState(chatId, 'add_author', {});
     await bot.editMessageText('👤 Имя автора (без @):', {
       chat_id: chatId, message_id: msgId,
-      reply_markup: { inline_keyboard: [[{ text: '❌', callback_data: 'list_authors' }]] },
+      reply_markup: { inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'cancel' }]] },
     });
     return;
   }
@@ -730,8 +740,10 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
   }
 
   if (data.startsWith('atgl_')) {
-    await toggleAuthorSubscription(parseInt(data.split('_')[1]));
-    await showAuthorDetails(bot, chatId, parseInt(data.split('_')[1]), msgId);
+    const subId = parseInt(data.split('_')[1]);
+    const sub = user.authorSubs.find(s => s.id === subId);
+    if (sub) await toggleAuthorSubscription(chatId, sub.authorUsername);
+    await showAuthorDetails(bot, chatId, subId, msgId);
     return;
   }
 
@@ -742,18 +754,20 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
     return;
   }
 
-  
-  // Community subscriptions
-  if (data === 'list_communities') {
-    await showCommunitiesList(bot, chatId, msgId);
+  if (data.startsWith('adel_')) {
+    const subId = parseInt(data.split('_')[1]);
+    const sub = user.authorSubs.find(s => s.id === subId);
+    if (sub) await removeAuthorSubscription(chatId, sub.authorUsername);
+    await showAuthorsList(bot, chatId);
     return;
   }
 
+  // Community subscriptions
   if (data === 'add_community') {
     await setDialogState(chatId, 'add_community', {});
     await bot.editMessageText('👥 Имя сообщества (без @):', {
       chat_id: chatId, message_id: msgId,
-      reply_markup: { inline_keyboard: [[{ text: '❌', callback_data: 'list_communities' }]] },
+      reply_markup: { inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'cancel' }]] },
     });
     return;
   }
@@ -778,53 +792,17 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
 
   if (data.startsWith('cdel_')) {
     await removeCommunitySubscription(parseInt(data.split('_')[1]));
-    await showCommunitiesList(bot, chatId, msgId);
+    await showCommunitiesList(bot, chatId);
     return;
   }
 
-  if (data.startsWith('adel_')) {
-    await removeAuthorSubscription(parseInt(data.split('_')[1]));
-    await showAuthorsList(bot, chatId, msgId);
+  // Cancel action
+  if (data === 'cancel') {
+    await bot.deleteMessage(chatId, msgId);
     return;
   }
 
-  // Status
-  if (data === 'status') {
-    if (!user.isAdmin) {
-      const text = `
-📊 *Ваша статистика*
-
-📦 Наборов: ${user.tagSets.length}
-👤 Подписок: ${user.authorSubs.length}
-📤 Постов: ${user.postsReceived}
-      `;
-      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '◀️', callback_data: 'main_menu' }]] } });
-      return;
-    }
-
-    const stats = await getDetailedStats();
-    const text = `
-👑 *Статистика*
-
-👥 Пользователей: ${stats.users.total}
-📦 Наборов: ${stats.tagSets.total}
-👤 Подписок: ${stats.authorSubs}
-📬 Постов: ${stats.posts.totalSent}
-    `;
-    await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '◀️', callback_data: 'main_menu' }]] } });
-    return;
-  }
-
-  // Help
-  if (data === 'help') {
-    await bot.editMessageText('📖 Используйте кнопки меню', {
-      chat_id: chatId, message_id: msgId,
-      reply_markup: { inline_keyboard: [[{ text: '◀️', callback_data: 'main_menu' }]] },
-    });
-    return;
-  }
-
-  // Delete
+  // Delete account
   if (data === 'confirm_delete') {
     await deleteUser(chatId);
     await bot.editMessageText('🗑 Удалено', { chat_id: chatId, message_id: msgId });
@@ -832,17 +810,12 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
   }
 
   if (data === 'cancel_delete') {
-    await showMainMenu(bot, chatId, user, msgId);
+    await bot.deleteMessage(chatId, msgId);
     return;
   }
 
   // Admin
   if (!user?.isAdmin) return;
-
-  if (data === 'admin_panel') {
-    await showAdminPanel(bot, chatId, msgId);
-    return;
-  }
 
   if (data === 'adm_users' || data.startsWith('adm_us_')) {
     const page = data.includes('_us_') ? parseInt(data.split('_')[2]) : 0;
@@ -870,7 +843,7 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
   if (data === 'adm_parse') {
     await bot.editMessageText('🔄 Парсинг...', { chat_id: chatId, message_id: msgId });
     const result = await runParsing(bot);
-    await bot.editMessageText(result.error ? `❌ ${result.error}` : `✅ Новых: ${result.newPosts}, отправлено: ${result.sent}`, { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [[{ text: '◀️', callback_data: 'admin_panel' }]] } });
+    await bot.editMessageText(result.error ? `❌ ${result.error}` : `✅ Новых: ${result.newPosts}, отправлено: ${result.sent}`, { chat_id: chatId, message_id: msgId });
     return;
   }
 }
