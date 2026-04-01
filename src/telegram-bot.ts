@@ -10,12 +10,13 @@ import {
   addIncludeTag, removeIncludeTag, addExcludeTag, removeExcludeTag,
   addAuthorSubscription, removeAuthorSubscription, toggleAuthorSubscription, setAuthorPreviewMode,
   getSubscribersForAuthor,
+  addCommunitySubscription, removeCommunitySubscription, toggleCommunitySubscription, setCommunityPreviewMode,
   getDialogState, setDialogState, clearDialogState,
   isPostSeen, addSeenPost, hasUserReceivedPost, recordUserPost,
   getDetailedStats, getPopularTags, getPopularAuthors,
   incrementUserPostsReceived, incrementGlobalPostsSent, recordParseTime, recordParseError,
   blockUser, unblockUser,
-  UserData, TagSetData, AuthorSubData, PostData,
+  UserData, TagSetData, AuthorSubData, CommunitySubData, PostData,
 } from './storage';
 import { parsePikabu, parseMultipleTags, Post as ParserPost } from './pikabu-parser';
 
@@ -217,6 +218,7 @@ function getMainMenuKeyboard(isAdmin: boolean): TelegramBot.InlineKeyboardMarkup
   const buttons: TelegramBot.InlineKeyboardButton[][] = [
     [{ text: '📦 Наборы тегов', callback_data: 'list_sets' }],
     [{ text: '👤 Подписки на авторов', callback_data: 'list_authors' }],
+    [{ text: '👥 Подписки на сообщества', callback_data: 'list_communities' }],
     [{ text: '📊 Статистика', callback_data: 'status' }],
   ];
 
@@ -376,6 +378,76 @@ async function showAuthorDetails(bot: TelegramBot, chatId: number, subId: number
     [{ text: as.sendPreview ? '🖼 Превью: вкл' : '🖼 Превью: выкл', callback_data: `aprv_${subId}` }],
     [{ text: '🗑 Удалить', callback_data: `adel_${subId}` }],
     [{ text: '◀️', callback_data: 'list_authors' }],
+    [{ text: '👥 Подписки на сообщества', callback_data: 'list_communities' }],
+  ];
+
+  if (msgId) {
+    try {
+      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+    } catch (e) {}
+  } else {
+    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+  }
+}
+
+
+// ===== ПОДПИСКИ НА СООБЩЕСТВА =====
+
+async function showCommunitiesList(bot: TelegramBot, chatId: number, msgId?: number) {
+  const user = await getUser(chatId);
+  if (!user) return;
+
+  if (!user.communitySubs || user.communitySubs.length === 0) {
+    const text = '📭 Нет подписок на сообщества';
+    const btns: TelegramBot.InlineKeyboardButton[][] = [
+      [{ text: '➕ Добавить', callback_data: 'add_community' }],
+      [{ text: '◀️', callback_data: 'main_menu' }],
+    ];
+    if (msgId) {
+      try {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: btns } });
+      } catch (e) {}
+    } else {
+      await bot.sendMessage(chatId, text, { reply_markup: { inline_keyboard: btns } });
+    }
+    return;
+  }
+
+  const text = `👥 *Подписки на сообщества:*`;
+  const btns: TelegramBot.InlineKeyboardButton[][] = user.communitySubs.map(cs => [{
+    text: `${cs.isActive ? '✅' : '⏸'} @${cs.communityName}`,
+    callback_data: `comm_${cs.id}`,
+  }]);
+  btns.push([{ text: '➕ Добавить', callback_data: 'add_community' }]);
+  btns.push([{ text: '◀️', callback_data: 'main_menu' }]);
+
+  if (msgId) {
+    try {
+      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+    } catch (e) {}
+  } else {
+    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+  }
+}
+
+async function showCommunityDetails(bot: TelegramBot, chatId: number, subId: number, msgId?: number) {
+  const user = await getUser(chatId);
+  if (!user) return;
+  const cs = user.communitySubs?.find(s => s.id === subId);
+  if (!cs) return;
+
+  const text = `
+👥 *@${cs.communityName}*
+
+✅ Активна: ${cs.isActive ? 'Да' : 'Нет'}
+🖼 Превью: ${cs.sendPreview ? 'Да' : 'Нет'}
+  `;
+
+  const btns: TelegramBot.InlineKeyboardButton[][] = [
+    [{ text: cs.isActive ? '⏸ Выкл' : '▶️ Вкл', callback_data: `ctgl_${subId}` }],
+    [{ text: cs.sendPreview ? '🖼 Превью: вкл' : '🖼 Превью: выкл', callback_data: `cprv_${subId}` }],
+    [{ text: '🗑 Удалить', callback_data: `cdel_${subId}` }],
+    [{ text: '◀️', callback_data: 'list_communities' }],
   ];
 
   if (msgId) {
@@ -520,6 +592,21 @@ async function handleDialog(bot: TelegramBot, chatId: number, dialog: { state: s
       break;
     }
 
+    
+    case 'add_community':
+      if (text.trim()) {
+        const community = text.trim().replace('@', '').toLowerCase();
+        const result = await addCommunitySubscription(chatId, community);
+        if (result.success) {
+          await bot.sendMessage(chatId, `✅ Подписка на сообщество @${community}`);
+        } else {
+          await bot.sendMessage(chatId, `❌ Ошибка: ${result.error}`);
+        }
+        await showCommunitiesList(bot, chatId);
+      }
+      await clearDialogState(chatId);
+      break;
+
     case 'add_author':
       if (text.trim()) {
         const author = text.trim().replace('@', '').toLowerCase();
@@ -652,6 +739,46 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
     const sub = user.authorSubs.find(s => s.id === parseInt(data.split('_')[1]));
     if (sub) await setAuthorPreviewMode(chatId, sub.authorUsername, !sub.sendPreview);
     await showAuthorDetails(bot, chatId, parseInt(data.split('_')[1]), msgId);
+    return;
+  }
+
+  
+  // Community subscriptions
+  if (data === 'list_communities') {
+    await showCommunitiesList(bot, chatId, msgId);
+    return;
+  }
+
+  if (data === 'add_community') {
+    await setDialogState(chatId, 'add_community', {});
+    await bot.editMessageText('👥 Имя сообщества (без @):', {
+      chat_id: chatId, message_id: msgId,
+      reply_markup: { inline_keyboard: [[{ text: '❌', callback_data: 'list_communities' }]] },
+    });
+    return;
+  }
+
+  if (data.startsWith('comm_')) {
+    await showCommunityDetails(bot, chatId, parseInt(data.split('_')[1]), msgId);
+    return;
+  }
+
+  if (data.startsWith('ctgl_')) {
+    await toggleCommunitySubscription(parseInt(data.split('_')[1]));
+    await showCommunityDetails(bot, chatId, parseInt(data.split('_')[1]), msgId);
+    return;
+  }
+
+  if (data.startsWith('cprv_')) {
+    const sub = user.communitySubs?.find(s => s.id === parseInt(data.split('_')[1]));
+    if (sub) await setCommunityPreviewMode(chatId, sub.communityName, !sub.sendPreview);
+    await showCommunityDetails(bot, chatId, parseInt(data.split('_')[1]), msgId);
+    return;
+  }
+
+  if (data.startsWith('cdel_')) {
+    await removeCommunitySubscription(parseInt(data.split('_')[1]));
+    await showCommunitiesList(bot, chatId, msgId);
     return;
   }
 
