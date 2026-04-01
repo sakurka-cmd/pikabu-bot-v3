@@ -932,7 +932,7 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
 
     for (const user of users) {
       if (user.isBlocked) continue;
-      if (await hasUserReceivedPost(user.chatId, dbPostId)) continue;
+      if (await hasUserReceivedPost(user.chatId, String(dbPostId))) continue;
 
       // Check tag sets
       for (const ts of user.tagSets) {
