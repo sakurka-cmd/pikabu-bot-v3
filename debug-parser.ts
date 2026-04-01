@@ -1,4 +1,4 @@
-// Debug script to analyze Pikabu HTML structure
+// Debug script to find window.data
 
 const WIN1251_TO_UNICODE: Record<number, string> = {};
 for (let i = 0; i < 256; i++) {
@@ -11,8 +11,8 @@ for (let i = 0xC0; i <= 0xFF; i++) {
     WIN1251_TO_UNICODE[i] = String.fromCharCode(i + 0x350);
   }
 }
-WIN1251_TO_UNICODE[0xA8] = '\u0401'; // Ё
-WIN1251_TO_UNICODE[0xB8] = '\u0451'; // ё
+WIN1251_TO_UNICODE[0xA8] = '\u0401';
+WIN1251_TO_UNICODE[0xB8] = '\u0451';
 
 function decodeWindows1251(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
@@ -40,89 +40,77 @@ async function debug() {
   const buffer = await response.arrayBuffer();
   const html = decodeWindows1251(buffer);
   
-  console.log('HTML length:', html.length);
-  
-  // Check page title
-  const pageTitleMatch = html.match(/<title>([^<]+)<\/title>/);
-  console.log('\n=== Page title ===');
-  console.log(pageTitleMatch ? pageTitleMatch[1] : 'not found');
-  
-  // Look for script tags with JSON
-  console.log('\n=== Script tags ===');
-  const scriptMatches = html.match(/<script[^>]*>[\s\S]+?<\/script>/gi) || [];
-  console.log('Found script tags:', scriptMatches.length);
-  
-  // Check for common data patterns
-  console.log('\n=== Data patterns ===');
-  
-  // Pattern 1: data-story-id
-  const storyIdMatches = html.match(/data-story-id="(\d+)"/g) || [];
-  console.log('data-story-id attributes:', storyIdMatches.length);
-  if (storyIdMatches.length > 0) {
-    console.log('  First 3:', storyIdMatches.slice(0, 3));
-  }
-  
-  // Pattern 2: story__title class
-  const titleClassMatches = html.match(/class="[^"]*story__title[^"]*"/gi) || [];
-  console.log('story__title classes:', titleClassMatches.length);
-  
-  // Pattern 3: Look for article tags
-  const articleMatches = html.match(/<article[^>]*>/gi) || [];
-  console.log('article tags:', articleMatches.length);
-  
-  // Pattern 4: Any JSON-like structures
-  const jsonLikeMatches = html.match(/\{[^{}]*"[a-z_]+"\s*:\s*[^}]+\}/gi) || [];
-  console.log('JSON-like objects:', jsonLikeMatches.length);
-  
-  // Pattern 5: Look for specific Pikabu data
-  const pikabuDataPatterns = [
-    'APP_STATE',
-    'INITIAL_STATE', 
-    '__STATE__',
-    'window.data',
-    'preloadData',
-    '"data":',
-    '"items":',
-    '"posts":'
-  ];
-  
-  console.log('\n=== Pikabu data patterns ===');
-  for (const pattern of pikabuDataPatterns) {
-    const found = html.includes(pattern);
-    console.log(pattern + ':', found ? 'FOUND' : 'not found');
-  }
-  
-  // Extract first story title from HTML
-  console.log('\n=== First story from HTML ===');
-  const storyTitleMatch = html.match(/<a[^>]*class="[^"]*story__title[^"]*"[^>]*>([^<]+)<\/a>/i);
-  if (storyTitleMatch) {
-    console.log('Title:', storyTitleMatch[1].trim().substring(0, 60));
-  }
-  
-  // Look for story data in a different format
-  const storyDataMatch = html.match(/data-story="([^"]+)"/);
-  if (storyDataMatch) {
-    console.log('data-story attribute found, length:', storyDataMatch[1].length);
+  // Find window.data
+  console.log('\n=== Looking for window.data ===');
+  const windowDataMatch = html.match(/window\.data\s*=\s*(\{[\s\S]+?\});?\s*<\/script>/);
+  if (windowDataMatch) {
+    console.log('Found window.data!');
     try {
-      const decoded = JSON.parse(storyDataMatch[1].replace(/&quot;/g, '"'));
-      console.log('Parsed story data:', Object.keys(decoded));
+      const data = JSON.parse(windowDataMatch[1]);
+      console.log('Keys:', Object.keys(data));
+      
+      // Look for stories in the data
+      if (data.stories) {
+        console.log('\n=== Stories found:', data.stories.length, '===');
+        for (let i = 0; i < Math.min(3, data.stories.length); i++) {
+          const s = data.stories[i];
+          console.log('\nStory', i + 1, ':');
+          console.log('  ID:', s.id);
+          console.log('  Title:', s.title);
+          console.log('  Tags:', s.tags ? s.tags.slice(0, 3) : 'none');
+          console.log('  Images:', s.images ? s.images.length : 0);
+          if (s.images && s.images.length > 0) {
+            console.log('  First image:', s.images[0]);
+          }
+        }
+      }
     } catch (e) {
-      console.log('Could not parse data-story');
+      console.log('Parse error:', e);
+      console.log('First 200 chars of match:', windowDataMatch[1].substring(0, 200));
+    }
+  } else {
+    // Try alternative patterns
+    console.log('window.data not found in standard format');
+    
+    // Check script contents
+    const scriptMatches = html.match(/<script[^>]*>[\s\S]+?<\/script>/gi) || [];
+    console.log('Checking', scriptMatches.length, 'script tags...');
+    
+    for (let i = 0; i < scriptMatches.length; i++) {
+      const script = scriptMatches[i];
+      if (script.includes('window.data') || script.includes('"stories"')) {
+        console.log('\nScript', i, 'contains relevant data:');
+        console.log(script.substring(0, 500));
+        break;
+      }
     }
   }
   
-  // Check for embedded JSON in data attributes
-  const dataAttrMatches = html.match(/data-[a-z-]+="\{[^"]+\}"/gi) || [];
-  console.log('\nData attributes with JSON:', dataAttrMatches.length);
-  if (dataAttrMatches.length > 0) {
-    console.log('First:', dataAttrMatches[0].substring(0, 100));
+  // Also try extracting from HTML attributes
+  console.log('\n=== Extracting from HTML attributes ===');
+  const articleMatch = html.match(/<article[^>]*data-story-id="(\d+)"[^>]*data-author-name="([^"]+)"[^>]*>/);
+  if (articleMatch) {
+    console.log('Story ID:', articleMatch[1]);
+    console.log('Author:', articleMatch[2]);
   }
   
-  // Look for the actual story content structure
-  console.log('\n=== Story HTML structure ===');
-  const storyBlockMatch = html.match(/<article[^>]*data-story-id="\d+"[^>]*>[\s\S]{0,500}/);
-  if (storyBlockMatch) {
-    console.log('First article (500 chars):', storyBlockMatch[0].substring(0, 500));
+  // Find title link
+  const titleMatch = html.match(/<a[^>]*class="[^"]*story__title[^"]*"[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/);
+  if (titleMatch) {
+    console.log('Title link:', titleMatch[1]);
+    console.log('Title text:', titleMatch[2]);
+  }
+  
+  // Find image in story
+  const imgMatch = html.match(/<img[^>]*class="[^"]*story-image[^"]*"[^>]*src="([^"]+)"/);
+  if (imgMatch) {
+    console.log('Story image:', imgMatch[1]);
+  }
+  
+  // Alternative image pattern
+  const imgMatch2 = html.match(/data-src="(https?:\/\/[^"]*pikabu[^"]*\.(jpg|png|gif|webp)[^"]*)"/i);
+  if (imgMatch2) {
+    console.log('Image via data-src:', imgMatch2[1]);
   }
 }
 
