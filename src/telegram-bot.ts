@@ -1095,7 +1095,18 @@ async function sendFullPost(bot: TelegramBot, chatId: number, post: ParserPost, 
   if (authorName) text += `\n👤 Автор: ${escapeMarkdown(authorName)}`;
   if (communityName) text += `\n👥 Сообщество: ${escapeMarkdown(communityName)}`;
 
-  if (post.images.length === 0) {
+  // Add body text if available
+  if (post.body && post.body.length > 0) {
+    const bodyPreview = post.body.slice(0, 500).trim();
+    text += `\n\n📝 ${bodyPreview}${bodyPreview.length >= 500 ? '...' : ''}\n`;
+  }
+
+  // Add videos if available
+  if (post.videos && post.videos.length > 0) {
+    text += `\n🎬 Видео: ${post.videos.length} шт.`;
+  }
+
+  if (post.images.length === 0 && (!post.body || post.body.length === 0)) {
     await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', disable_web_page_preview: true });
     return;
   }
@@ -1104,7 +1115,7 @@ async function sendFullPost(bot: TelegramBot, chatId: number, post: ParserPost, 
   await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', disable_web_page_preview: true });
 
   // Send images
-  for (const imgUrl of post.images.slice(0, 5)) {
+  for (const imgUrl of post.images.slice(0, 10)) {
     try {
       await bot.sendPhoto(chatId, imgUrl);
       await new Promise(r => setTimeout(r, 200));
