@@ -343,7 +343,7 @@ async function showAuthorsList(bot: TelegramBot, chatId: number, msgId?: number)
 
   const text = `👤 *Подписки:*`;
   const btns: TelegramBot.InlineKeyboardButton[][] = user.authorSubs.map(as => [{
-    text: `${as.isActive ? '✅' : '⏸'} @${as.author}`,
+    text: `${as.isActive ? '✅' : '⏸'} @${as.authorUsername}`,
     callback_data: `auth_${as.id}`,
   }]);
   btns.push([{ text: '➕ Добавить', callback_data: 'add_author' }]);
@@ -365,7 +365,7 @@ async function showAuthorDetails(bot: TelegramBot, chatId: number, subId: number
   if (!as) return;
 
   const text = `
-👤 *@${as.author}*
+👤 *@${as.authorUsername}*
 
 ✅ Активна: ${as.isActive ? 'Да' : 'Нет'}
 🖼 Превью: ${as.sendPreview ? 'Да' : 'Нет'}
@@ -650,7 +650,7 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
 
   if (data.startsWith('aprv_')) {
     const sub = user.authorSubs.find(s => s.id === parseInt(data.split('_')[1]));
-    if (sub) await setAuthorPreviewMode(sub.id, !sub.sendPreview);
+    if (sub) await setAuthorPreviewMode(chatId, sub.authorUsername, !sub.sendPreview);
     await showAuthorDetails(bot, chatId, parseInt(data.split('_')[1]), msgId);
     return;
   }
