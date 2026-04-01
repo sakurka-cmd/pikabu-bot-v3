@@ -781,7 +781,7 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
       }
     }
     for (const as of u.authorSubs) {
-      if (as.isActive) allAuthors.add(as.author);
+      if (as.isActive) allAuthors.add(as.authorUsername);
     }
   }
 
@@ -800,10 +800,8 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
 
   for (const post of posts) {
     if (await isPostSeen(post.id)) continue;
-    await addSeenPost(post.id);
+    const dbPostId = await addSeenPost(post);
     newPosts++;
-
-    const dbPostId = await incrementGlobalPostsSent();
 
     for (const user of users) {
       if (user.isBlocked) continue;
@@ -849,6 +847,7 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
             await sendFullPost(bot, user.chatId, post, ts.name);
             await recordUserPost(user.chatId, dbPostId, false);
             await incrementUserPostsReceived(user.chatId);
+            await incrementGlobalPostsSent();
             sent++;
             await new Promise(r => setTimeout(r, 300));
           } catch (e) {
