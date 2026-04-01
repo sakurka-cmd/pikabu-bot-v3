@@ -907,3 +907,16 @@ function escapeMarkdown(text: string): string {
 }
 
 export { botInstance };
+
+export function stopBot() {
+  if (parseInterval) {
+    clearInterval(parseInterval);
+    parseInterval = null;
+  }
+  if (botInstance) {
+    botInstance.stopPolling();
+    botInstance = null;
+  }
+  console.log("[Bot] Stopped");
+}
+
