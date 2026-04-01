@@ -18,7 +18,7 @@ import {
   blockUser, unblockUser,
   UserData, TagSetData, AuthorSubData, CommunitySubData, PostData,
 } from './storage';
-import { parsePikabu, parseMultipleTags, Post as ParserPost } from './pikabu-parser';
+import { parsePikabu, parseMultipleTags, parseMultipleAuthors, parseMultipleCommunities, Post as ParserPost } from './pikabu-parser';
 
 let botInstance: TelegramBot | null = null;
 let parseInterval: Timer | null = null;
@@ -891,6 +891,7 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
 
   const allTags = new Set<string>();
   const allAuthors = new Set<string>();
+  const allCommunities = new Set<string>();
 
   for (const u of users) {
     for (const ts of u.tagSets) {
@@ -902,17 +903,44 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
     for (const as of u.authorSubs) {
       if (as.isActive) allAuthors.add(as.authorUsername);
     }
+    if (u.communitySubs) {
+      for (const cs of u.communitySubs) {
+        if (cs.isActive) allCommunities.add(cs.communityName);
+      }
+    }
   }
 
   console.log(`[Parsing] Active users: ${users.length}`);
-  console.log(`[Parsing] Total tags to parse: ${allTags.size} -> [${Array.from(allTags).join(', ')}]`);
+  console.log(`[Parsing] Total tags: ${allTags.size}, authors: ${allAuthors.size}, communities: ${allCommunities.size}`);
 
   let posts: ParserPost[] = [];
+  
+  // Parse by tags
   if (allTags.size > 0) {
-    posts = await parseMultipleTags(Array.from(allTags));
+    const tagPosts = await parseMultipleTags(Array.from(allTags));
+    posts.push(...tagPosts);
+    console.log(`[Parsing] Tag parsing: ${tagPosts.length} posts`);
   }
 
-  console.log(`[Parsing] Fetched ${posts.length} posts`);
+  // Parse by authors
+  if (allAuthors.size > 0) {
+    console.log(`[Parsing] Parsing authors: [${Array.from(allAuthors).join(', ')}]`);
+    const authorPosts = await parseMultipleAuthors(Array.from(allAuthors));
+    posts.push(...authorPosts);
+    console.log(`[Parsing] Author parsing: ${authorPosts.length} posts`);
+  }
+
+  // Parse by communities
+  if (allCommunities.size > 0) {
+    console.log(`[Parsing] Parsing communities: [${Array.from(allCommunities).join(', ')}]`);
+    const communityPosts = await parseMultipleCommunities(Array.from(allCommunities));
+    posts.push(...communityPosts);
+    console.log(`[Parsing] Community parsing: ${communityPosts.length} posts`);
+  }
+
+  // Dedupe posts by ID
+  posts = Array.from(new Map(posts.map(p => [p.id, p])).values());
+  console.log(`[Parsing] Total unique posts: ${posts.length}`);
 
   let newPosts = 0;
   let sent = 0;
@@ -946,6 +974,8 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
       if (user.isBlocked) continue;
       if (await hasUserReceivedPost(user.chatId, String(dbPostId))) continue;
 
+      let sentToUser = false;
+
       // Check tag sets
       for (const ts of user.tagSets) {
         if (!ts.isActive) continue;
@@ -975,19 +1005,14 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
         });
 
         if (hasInclude) {
-          console.log(`[Parsing] MATCH! All include tags found: [${matchedTags.join(', ')}]`);
-        }
-
-        console.log(`[Parsing] Post ${post.id} tags: [${post.tags.map(t => `"${t}"`).join(',')}], Set "${ts.name}" include: [${ts.includeTags.map(t => `"${t}"`).join(',')}], matched: [${matchedTags.join(', ')}], result: ${hasInclude}`);
-
-        if (hasInclude) {
+          console.log(`[Parsing] Post ${post.id} MATCHES tag set "${ts.name}"`);
           try {
-            console.log(`[Parsing] Sending post ${post.id} to user ${user.chatId}`);
             await sendFullPost(bot, user.chatId, post, ts.name);
             await recordUserPost(user.chatId, dbPostId, false);
             await incrementUserPostsReceived(user.chatId);
             await incrementGlobalPostsSent();
             sent++;
+            sentToUser = true;
             await new Promise(r => setTimeout(r, 300));
           } catch (e) {
             console.error(`[Bot] Send error:`, e);
@@ -995,13 +1020,55 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
           break;
         }
       }
-    }
-  }
 
-  // Process by author subscriptions
-  for (const author of allAuthors) {
-    // For now, author-based parsing would require additional implementation
-    // This is a placeholder for future enhancement
+      if (sentToUser) continue;
+
+      // Check author subscriptions
+      for (const as of user.authorSubs) {
+        if (!as.isActive) continue;
+        if (post.author.toLowerCase() === as.authorUsername.toLowerCase()) {
+          console.log(`[Parsing] Post ${post.id} MATCHES author @${as.authorUsername}`);
+          try {
+            await sendFullPost(bot, user.chatId, post, undefined, `@${as.authorUsername}`);
+            await recordUserPost(user.chatId, dbPostId, as.sendPreview);
+            await incrementUserPostsReceived(user.chatId);
+            await incrementGlobalPostsSent();
+            sent++;
+            sentToUser = true;
+            await new Promise(r => setTimeout(r, 300));
+          } catch (e) {
+            console.error(`[Bot] Send error:`, e);
+          }
+          break;
+        }
+      }
+
+      if (sentToUser) continue;
+
+      // Check community subscriptions
+      if (user.communitySubs) {
+        for (const cs of user.communitySubs) {
+          if (!cs.isActive) continue;
+          // Check if post link contains community name or post has community tag
+          const postHasCommunity = post.link.toLowerCase().includes(`/community/${cs.communityName.toLowerCase()}`) ||
+            post.tags.some(t => t.toLowerCase() === cs.communityName.toLowerCase());
+          if (postHasCommunity) {
+            console.log(`[Parsing] Post ${post.id} MATCHES community @${cs.communityName}`);
+            try {
+              await sendFullPost(bot, user.chatId, post, undefined, undefined, cs.communityName);
+              await recordUserPost(user.chatId, dbPostId, cs.sendPreview);
+              await incrementUserPostsReceived(user.chatId);
+              await incrementGlobalPostsSent();
+              sent++;
+              await new Promise(r => setTimeout(r, 300));
+            } catch (e) {
+              console.error(`[Bot] Send error:`, e);
+            }
+            break;
+          }
+        }
+      }
+    }
   }
 
   await recordParseTime();
@@ -1010,13 +1077,15 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
   return { newPosts, sent };
 }
 
-async function sendFullPost(bot: TelegramBot, chatId: number, post: ParserPost, setName?: string) {
+async function sendFullPost(bot: TelegramBot, chatId: number, post: ParserPost, setName?: string, authorName?: string, communityName?: string) {
   let text = '';
   text += `📌 *${escapeMarkdown(post.title)}*\n`;
   text += `\n🏷 ${post.tags.slice(0, 5).map(t => '#' + escapeMarkdown(t)).join(' ')}`;
   text += `\n👤 @${escapeMarkdown(post.author)}`;
   text += `\n🔗 [Ссылка](${post.link})`;
   if (setName) text += `\n📦 Набор: ${escapeMarkdown(setName)}`;
+  if (authorName) text += `\n👤 Автор: ${escapeMarkdown(authorName)}`;
+  if (communityName) text += `\n👥 Сообщество: ${escapeMarkdown(communityName)}`;
 
   if (post.images.length === 0) {
     await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', disable_web_page_preview: true });

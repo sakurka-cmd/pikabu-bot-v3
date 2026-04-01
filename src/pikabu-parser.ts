@@ -293,3 +293,121 @@ export async function parseMultipleTags(tags: string[]): Promise<Post[]> {
 
   return Array.from(new Map(allPosts.map(p => [p.id, p])).values());
 }
+
+// ===== AUTHOR PARSING =====
+
+export async function parseAuthorPage(authorUsername: string): Promise<Post[]> {
+  const parsedAt = new Date().toISOString();
+
+  try {
+    const url = `https://pikabu.ru/@${encodeURIComponent(authorUsername)}?f=new`;
+    console.log(`[Parser] Fetching author: ${url}`);
+
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+      },
+    });
+
+    if (!response.ok) {
+      console.log(`[Parser] Author ${authorUsername}: HTTP ${response.status}`);
+      return [];
+    }
+
+    const buffer = await response.arrayBuffer();
+    const html = decodeWindows1251(buffer);
+    
+    console.log(`[Parser] Author ${authorUsername} HTML length: ${html.length}`);
+    
+    const $ = cheerio.load(html, { decodeEntities: false });
+    const posts = parseHtmlPosts($);
+    
+    console.log(`[Parser] Author ${authorUsername}: found ${posts.length} posts`);
+    return posts.filter(p => p.images.length > 0);
+
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[Parser] Author ${authorUsername} error:`, errorMessage);
+    return [];
+  }
+}
+
+export async function parseMultipleAuthors(authors: string[]): Promise<Post[]> {
+  const allPosts: Post[] = [];
+
+  for (let i = 0; i < authors.length; i += 2) {
+    const batch = authors.slice(i, i + 2);
+    const results = await Promise.all(batch.map(a => parseAuthorPage(a)));
+
+    for (const posts of results) {
+      allPosts.push(...posts);
+    }
+
+    if (i + 2 < authors.length) {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+
+  return Array.from(new Map(allPosts.map(p => [p.id, p])).values());
+}
+
+// ===== COMMUNITY PARSING =====
+
+export async function parseCommunityPage(communityName: string): Promise<Post[]> {
+  const parsedAt = new Date().toISOString();
+
+  try {
+    const url = `https://pikabu.ru/community/${encodeURIComponent(communityName)}?f=new`;
+    console.log(`[Parser] Fetching community: ${url}`);
+
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+      },
+    });
+
+    if (!response.ok) {
+      console.log(`[Parser] Community ${communityName}: HTTP ${response.status}`);
+      return [];
+    }
+
+    const buffer = await response.arrayBuffer();
+    const html = decodeWindows1251(buffer);
+    
+    console.log(`[Parser] Community ${communityName} HTML length: ${html.length}`);
+    
+    const $ = cheerio.load(html, { decodeEntities: false });
+    const posts = parseHtmlPosts($);
+    
+    console.log(`[Parser] Community ${communityName}: found ${posts.length} posts`);
+    return posts.filter(p => p.images.length > 0);
+
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[Parser] Community ${communityName} error:`, errorMessage);
+    return [];
+  }
+}
+
+export async function parseMultipleCommunities(communities: string[]): Promise<Post[]> {
+  const allPosts: Post[] = [];
+
+  for (let i = 0; i < communities.length; i += 2) {
+    const batch = communities.slice(i, i + 2);
+    const results = await Promise.all(batch.map(c => parseCommunityPage(c)));
+
+    for (const posts of results) {
+      allPosts.push(...posts);
+    }
+
+    if (i + 2 < communities.length) {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+
+  return Array.from(new Map(allPosts.map(p => [p.id, p])).values());
+}
