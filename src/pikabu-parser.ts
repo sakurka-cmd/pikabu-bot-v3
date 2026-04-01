@@ -67,6 +67,13 @@ function isValidImageUrl(url: string): boolean {
   if (lower.includes('userpic')) return false;
   if (lower.includes('/icons/')) return false;
   if (lower.includes('favicon')) return false;
+  if (lower.includes('community_icon')) return false;
+  if (lower.includes('/communities/')) return false;
+  if (lower.includes('default_avatar')) return false;
+  if (lower.includes('profile')) return false;
+  if (lower.includes('badge')) return false;
+  if (lower.includes('_small.')) return false;
+  if (lower.includes('_tiny.')) return false;
   
   // Valid patterns
   return lower.includes('.jpg') || lower.includes('.jpeg') || lower.includes('.png') ||
@@ -197,9 +204,30 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
   // Get images - look for story images, skip avatars
   const images: string[] = [];
   
+  // Helper to check if image is in avatar/author area
+  const isAvatarArea = ($img: cheerio.Cheerio<any>): boolean => {
+    const parentClasses = $img.parents().map((_, el) => $(el).attr('class') || '').get().join(' ').toLowerCase();
+    return parentClasses.includes('avatar') ||
+           parentClasses.includes('author') ||
+           parentClasses.includes('user__') ||
+           parentClasses.includes('profile') ||
+           parentClasses.includes('story__user') ||
+           parentClasses.includes('community') ||
+           parentClasses.includes('story__tools');
+  };
+  
+  // Helper to check if image is too small (likely icon)
+  const isSmallImage = ($img: cheerio.Cheerio<any>): boolean => {
+    const width = parseInt($img.attr('width') || '0');
+    const height = parseInt($img.attr('height') || '0');
+    return (width > 0 && width < 100) || (height > 0 && height < 100);
+  };
+  
   // Method 1: story-image class
   $article.find('img.story-image, img.story__image').each((_, imgEl) => {
-    const src = $(imgEl).attr('src') || $(imgEl).attr('data-src');
+    const $img = $(imgEl);
+    if (isAvatarArea($img) || isSmallImage($img)) return;
+    const src = $img.attr('src') || $img.attr('data-src');
     if (src && isContentImageUrl(src)) {
       images.push(normalizeImageUrl(src));
     }
@@ -207,7 +235,9 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
   
   // Method 2: any image in story content area
   $article.find('.story__content img, .story-block img').each((_, imgEl) => {
-    const src = $(imgEl).attr('src') || $(imgEl).attr('data-src');
+    const $img = $(imgEl);
+    if (isAvatarArea($img) || isSmallImage($img)) return;
+    const src = $img.attr('src') || $img.attr('data-src');
     if (src && isContentImageUrl(src)) {
       images.push(normalizeImageUrl(src));
     }
@@ -215,7 +245,9 @@ function parseStoryElement($: cheerio.CheerioAPI, element: any): Post | null {
   
   // Method 3: data-src on any element (but skip avatars)
   $article.find('[data-src]').each((_, el) => {
-    const src = $(el).attr('data-src');
+    const $el = $(el);
+    if (isAvatarArea($el)) return;
+    const src = $el.attr('data-src');
     if (src && isContentImageUrl(src)) {
       images.push(normalizeImageUrl(src));
     }
