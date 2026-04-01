@@ -11,7 +11,6 @@ for (let i = 0xC0; i <= 0xFF; i++) {
     WIN1251_TO_UNICODE[i] = String.fromCharCode(i + 0x350);
   }
 }
-// Add other windows-1251 chars
 WIN1251_TO_UNICODE[0xA8] = '\u0401'; // Ё
 WIN1251_TO_UNICODE[0xB8] = '\u0451'; // ё
 
@@ -50,7 +49,7 @@ async function debug() {
   
   // Look for script tags with JSON
   console.log('\n=== Script tags ===');
-  const scriptMatches = html.match(/<script[^>]*>[\s\S]{100,}?</script>/gi) || [];
+  const scriptMatches = html.match(/<script[^>]*>[\s\S]+?<\/script>/gi) || [];
   console.log('Found script tags:', scriptMatches.length);
   
   // Check for common data patterns
