@@ -235,8 +235,16 @@ ${authors.slice(0, 5).map(a => `@${a.author} (${a.count})`).join('\n') || '—'}
   // Callbacks
   bot.on('callback_query', async (query) => {
     if (!query.message?.chat.id || !query.data) return;
-    await handleCallback(bot, query.message.chat.id, query.data, query.message.message_id);
-    await bot.answerCallbackQuery(query.id);
+    try {
+      await handleCallback(bot, query.message.chat.id, query.data, query.message.message_id);
+    } catch (e) {
+      console.error('[Bot] Callback handler error:', e);
+    }
+    try {
+      await bot.answerCallbackQuery(query.id);
+    } catch (e) {
+      // Query may be too old, ignore
+    }
   });
 
   bot.on('polling_error', (e) => console.error('[Bot] Polling error:', e.message));
