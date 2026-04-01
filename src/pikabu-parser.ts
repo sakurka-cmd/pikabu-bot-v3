@@ -134,7 +134,7 @@ export async function parsePikabu(tag?: string): Promise<ParseResult> {
     const posts = parseHtmlPosts($);
     
     console.log(`[Parser] Parsed ${posts.length} posts`);
-    return { posts: posts.filter(p => p.images.length > 0), error: null, parsedAt };
+    return { posts, error: null, parsedAt };
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -325,7 +325,7 @@ export async function parseAuthorPage(authorUsername: string): Promise<Post[]> {
     const posts = parseHtmlPosts($);
     
     console.log(`[Parser] Author ${authorUsername}: found ${posts.length} posts`);
-    return posts.filter(p => p.images.length > 0);
+    return posts;
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -384,7 +384,7 @@ export async function parseCommunityPage(communityName: string): Promise<Post[]>
     const posts = parseHtmlPosts($);
     
     console.log(`[Parser] Community ${communityName}: found ${posts.length} posts`);
-    return posts.filter(p => p.images.length > 0);
+    return posts;
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
