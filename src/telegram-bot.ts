@@ -880,15 +880,15 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
 function setupAutoParsing() {
   if (parseInterval) clearInterval(parseInterval);
 
-  // Parse every 5 minutes
+  // Parse every 10 minutes (reduced to avoid rate limiting)
   parseInterval = setInterval(async () => {
     if (botInstance) {
       console.log('[Parsing] Auto parse started');
       await runParsing(botInstance);
     }
-  }, 5 * 60 * 1000);
+  }, 10 * 60 * 1000);
 
-  console.log('[Bot] Auto parsing scheduled (5 min interval)');
+  console.log('[Bot] Auto parsing scheduled (10 min interval)');
 }
 
 async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: number; error?: string }> {

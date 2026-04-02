@@ -4,7 +4,32 @@
 
 import * as cheerio from 'cheerio';
 
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+
+// Rate limiting state
+let lastRequestTime = 0;
+const MIN_REQUEST_INTERVAL = 4000; // 4 seconds between requests
+const MAX_REQUEST_INTERVAL = 8000; // Up to 8 seconds with randomization
+
+// Random delay to look more natural
+function getRandomDelay(): number {
+  return MIN_REQUEST_INTERVAL + Math.random() * (MAX_REQUEST_INTERVAL - MIN_REQUEST_INTERVAL);
+}
+
+// Wait before making a request (rate limiting)
+async function waitForRateLimit(): Promise<void> {
+  const now = Date.now();
+  const elapsed = now - lastRequestTime;
+  const required = getRandomDelay();
+  
+  if (elapsed < required) {
+    const wait = required - elapsed;
+    console.log(`[Parser] Rate limit: waiting ${(wait/1000).toFixed(1)}s...`);
+    await new Promise(r => setTimeout(r, wait));
+  }
+  
+  lastRequestTime = Date.now();
+}
 
 export interface Post {
   id: string;
@@ -106,17 +131,35 @@ function normalizeImageUrl(url: string): string {
 // ===== FETCH HELPER =====
 
 async function fetchPage(url: string): Promise<string> {
+  // Rate limiting - wait before request
+  await waitForRateLimit();
+  
   console.log(`[Parser] Fetching: ${url}`);
   
   const response = await fetch(url, {
     headers: {
       'User-Agent': USER_AGENT,
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
       'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      'Cache-Control': 'max-age=0',
+      'Referer': 'https://pikabu.ru/',
     },
   });
 
   if (!response.ok) {
+    // Special handling for 429 - wait longer
+    if (response.status === 429) {
+      console.log('[Parser] Got 429, waiting 60 seconds before retry...');
+      await new Promise(r => setTimeout(r, 60000));
+      throw new Error(`HTTP 429: Rate limited (will retry on next cycle)`);
+    }
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
   }
 
@@ -331,16 +374,15 @@ export async function parsePikabu(tag?: string): Promise<ParseResult> {
 export async function parseMultipleTags(tags: string[]): Promise<Post[]> {
   const allPosts: Post[] = [];
 
-  for (let i = 0; i < tags.length; i += 3) {
-    const batch = tags.slice(i, i + 3);
-    const results = await Promise.all(batch.map(t => parsePikabu(t)));
-
-    for (const result of results) {
-      if (result.posts) allPosts.push(...result.posts);
-    }
-
-    if (i + 3 < tags.length) {
-      await new Promise(r => setTimeout(r, 2000));
+  // SEQUENTIAL parsing - one tag at a time to avoid rate limiting
+  for (const tag of tags) {
+    try {
+      const result = await parsePikabu(tag);
+      if (result.posts && result.posts.length > 0) {
+        allPosts.push(...result.posts);
+      }
+    } catch (e) {
+      console.error(`[Parser] Tag ${tag} failed:`, e);
     }
   }
 
@@ -361,18 +403,9 @@ export async function parseAuthorPage(authorUsername: string, fetchFull: boolean
     
     console.log(`[Parser] Author ${authorUsername}: ${previewPosts.length} preview posts`);
     
-    // Fetch full content for each post
-    const fullPosts: Post[] = [];
-    for (const post of previewPosts.slice(0, 3)) { // Limit to 3 posts for performance
-      console.log(`[Parser] Author ${authorUsername}: fetching full content for post ${post.id}...`);
-      const fullPost = await parseFullPost(post.id);
-      if (fullPost) {
-        fullPosts.push(fullPost);
-      }
-    }
-    
-    console.log(`[Parser] Author ${authorUsername}: ${fullPosts.length} full posts`);
-    return fullPosts;
+    // Return preview posts only (no full content fetch to avoid extra requests)
+    // Full content fetching was causing too many requests
+    return previewPosts.slice(0, 5); // Limit to 5 posts
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -384,16 +417,15 @@ export async function parseAuthorPage(authorUsername: string, fetchFull: boolean
 export async function parseMultipleAuthors(authors: string[]): Promise<Post[]> {
   const allPosts: Post[] = [];
 
-  for (let i = 0; i < authors.length; i += 2) {
-    const batch = authors.slice(i, i + 2);
-    const results = await Promise.all(batch.map(a => parseAuthorPage(a)));
-
-    for (const posts of results) {
-      allPosts.push(...posts);
-    }
-
-    if (i + 2 < authors.length) {
-      await new Promise(r => setTimeout(r, 2000));
+  // SEQUENTIAL parsing - one author at a time
+  for (const author of authors) {
+    try {
+      const posts = await parseAuthorPage(author);
+      if (posts.length > 0) {
+        allPosts.push(...posts);
+      }
+    } catch (e) {
+      console.error(`[Parser] Author ${author} failed:`, e);
     }
   }
 
@@ -414,18 +446,8 @@ export async function parseCommunityPage(communityName: string, fetchFull: boole
     
     console.log(`[Parser] Community ${communityName}: ${previewPosts.length} preview posts`);
     
-    // Fetch full content for each post
-    const fullPosts: Post[] = [];
-    for (const post of previewPosts.slice(0, 3)) { // Limit to 3 posts
-      console.log(`[Parser] Community ${communityName}: fetching full content for post ${post.id}...`);
-      const fullPost = await parseFullPost(post.id);
-      if (fullPost) {
-        fullPosts.push(fullPost);
-      }
-    }
-    
-    console.log(`[Parser] Community ${communityName}: ${fullPosts.length} full posts`);
-    return fullPosts;
+    // Return preview posts only (no full content fetch to avoid extra requests)
+    return previewPosts.slice(0, 5); // Limit to 5 posts
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -437,16 +459,15 @@ export async function parseCommunityPage(communityName: string, fetchFull: boole
 export async function parseMultipleCommunities(communities: string[]): Promise<Post[]> {
   const allPosts: Post[] = [];
 
-  for (let i = 0; i < communities.length; i += 2) {
-    const batch = communities.slice(i, i + 2);
-    const results = await Promise.all(batch.map(c => parseCommunityPage(c)));
-
-    for (const posts of results) {
-      allPosts.push(...posts);
-    }
-
-    if (i + 2 < communities.length) {
-      await new Promise(r => setTimeout(r, 2000));
+  // SEQUENTIAL parsing - one community at a time
+  for (const community of communities) {
+    try {
+      const posts = await parseCommunityPage(community);
+      if (posts.length > 0) {
+        allPosts.push(...posts);
+      }
+    } catch (e) {
+      console.error(`[Parser] Community ${community} failed:`, e);
     }
   }
 
