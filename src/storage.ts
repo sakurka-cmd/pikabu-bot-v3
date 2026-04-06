@@ -435,7 +435,6 @@ export async function createUser(
     ]
   );
 
-  // Update global stats
   run('UPDATE globalStats SET totalUsers = (SELECT COUNT(*) FROM users) WHERE id = 1');
 
   saveDatabase();
@@ -485,17 +484,14 @@ export async function getAllActiveUsers(): Promise<UserData[]> {
     'SELECT * FROM users WHERE isActive = 1 AND isBlocked = 0 ORDER BY joinedAt DESC'
   );
   console.log(`[DB] Found ${users.length} active users in database`);
-  
+
   const result: UserData[] = [];
 
   for (const u of users) {
     const user = await getUser(Number(u.chatId));
     if (user) {
-      const allTagSetsCount = user.tagSets.length;
-      // Filter active tag sets and author subs
       user.tagSets = user.tagSets.filter(ts => ts.isActive);
       user.authorSubs = user.authorSubs.filter(as => as.isActive);
-      console.log(`[DB] User ${user.chatId}: ${allTagSetsCount} tag sets total, ${user.tagSets.length} active, ${user.tagSets.reduce((sum, ts) => sum + ts.includeTags.length, 0)} include tags`);
       if (user.tagSets.length > 0) {
         result.push(user);
       }
@@ -504,28 +500,6 @@ export async function getAllActiveUsers(): Promise<UserData[]> {
 
   console.log(`[DB] Returning ${result.length} users with active tag sets`);
   return result;
-}
-
-// ===== ADMIN =====
-
-export async function blockUser(chatId: number): Promise<boolean> {
-  try {
-    run('UPDATE users SET isBlocked = 1, isActive = 0 WHERE chatId = ?', [String(chatId)]);
-    saveDatabase();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function unblockUser(chatId: number): Promise<boolean> {
-  try {
-    run('UPDATE users SET isBlocked = 0, isActive = 1 WHERE chatId = ?', [String(chatId)]);
-    saveDatabase();
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 // ===== TAG SETS =====
@@ -554,7 +528,6 @@ export async function createTagSet(chatId: number, name: string): Promise<{ succ
       [user.id, name.trim().slice(0, 50)]
     );
     saveDatabase();
-
     return { success: true, tagSet: await getTagSet(result.lastInsertRowId) };
   } catch {
     return { success: false, error: 'Create error' };
@@ -737,6 +710,12 @@ export async function getSubscribersForAuthor(authorUsername: string): Promise<U
   return result;
 }
 
+async function getUserById(id: number): Promise<UserData | null> {
+  const user = get<any>('SELECT chatId FROM users WHERE id = ?', [id]);
+  if (!user) return null;
+  return getUser(Number(user.chatId));
+}
+
 // ===== COMMUNITY SUBSCRIPTIONS =====
 
 export async function addCommunitySubscription(
@@ -815,12 +794,6 @@ export async function getSubscribersForCommunity(communityName: string): Promise
   }
 
   return result;
-}
-
-async function getUserById(id: number): Promise<UserData | null> {
-  const user = get<any>('SELECT chatId FROM users WHERE id = ?', [id]);
-  if (!user) return null;
-  return getUser(Number(user.chatId));
 }
 
 // ===== POSTS =====
@@ -952,12 +925,33 @@ export async function recordParseError(error: string): Promise<void> {
   saveDatabase();
 }
 
+// ===== ADMIN =====
+
+export async function blockUser(chatId: number): Promise<boolean> {
+  try {
+    run('UPDATE users SET isBlocked = 1, isActive = 0 WHERE chatId = ?', [String(chatId)]);
+    saveDatabase();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function unblockUser(chatId: number): Promise<boolean> {
+  try {
+    run('UPDATE users SET isBlocked = 0, isActive = 1 WHERE chatId = ?', [String(chatId)]);
+    saveDatabase();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ===== DETAILED STATS =====
 
 export async function getDetailedStats() {
   const stats = get<any>('SELECT * FROM globalStats WHERE id = 1');
 
-  // All these are synchronous calls
   const allUsers = all<any>('SELECT id FROM users');
   const activeUsers = all<any>('SELECT id FROM users WHERE isActive = 1 AND isBlocked = 0');
   const blockedUsers = all<any>('SELECT id FROM users WHERE isBlocked = 1');
