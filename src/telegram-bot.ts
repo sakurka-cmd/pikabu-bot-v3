@@ -12,8 +12,7 @@ import {
   blockUser, unblockUser,
   UserData, TagSetData,
 } from './storage';
-import { setPikabuCredentials, getPikabuCredentials, deletePikabuCredentials, togglePikabuCredentials } from './pikabu-credentials';
-import { parsePikabu, parseMultipleTags, parseMultipleAuthors, parseMultipleCommunities, parseFullPost, setAuthSession, hasAuthSession, areCookiesValid, Post } from './pikabu-parser';
+import { parsePikabu, parseMultipleTags, parseMultipleAuthors, parseMultipleCommunities, parseFullPost, Post } from './pikabu-parser';
 
 let botInstance: TelegramBot | null = null;
 let parseInterval: Timer | null = null;
@@ -34,14 +33,42 @@ export function stopBot(): void {
 }
 
 function getReplyKeyboard(isAdmin: boolean): TelegramBot.ReplyKeyboardMarkup {
-  const buttons: string[][] = [['📦 Наборы', '👤 Авторы'], ['👥 Сообщества', '📊 Статистика']];
-  if (isAdmin) buttons.push(['🔐 Аккаунт Pikabu', '⚙️ Админ']);
-  else buttons.push(['🔐 Аккаунт Pikabu']);
+  const buttons: string[][] = [
+    ['\u{1F5BC}\uFE0F \u041A\u0430\u0440\u0442\u0438\u043D\u043A\u0438', '\u{1F4F0} \u041F\u043E\u0441\u0442\u044B'],
+    ['\u{1F464} \u0410\u0432\u0442\u043E\u0440\u044B', '\u{1F465} \u0421\u043E\u043E\u0431\u0449\u0435\u0441\u0442\u0432\u0430'],
+    ['\u{1F4CA} \u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043A\u0430'],
+  ];
+  if (isAdmin) buttons.push(['\u2699\uFE0F \u0410\u0434\u043C\u0438\u043D']);
   return { keyboard: buttons, resize_keyboard: true };
 }
 
 function escapeMarkdown(text: string): string {
-  return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+  return text.replace(/([_*\[\]()\\`])/g, '\\$1');
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ===== TAG MATCHING HELPERS =====
+function matchTags(post: Post, ts: TagSetData): boolean {
+  if (ts.includeTags.length === 0) return false;
+  const hasExclude = ts.excludeTags.some(et =>
+    post.tags.some(pt => pt.toLowerCase().includes(et.toLowerCase()) || et.toLowerCase().includes(pt.toLowerCase()))
+  );
+  if (hasExclude) return false;
+  const hasInclude = ts.includeTags.every(it => {
+    const itLower = it.toLowerCase();
+    return post.tags.some(pt => pt.toLowerCase().includes(itLower) || itLower.includes(pt.toLowerCase()));
+  });
+  return hasInclude;
+}
+
+// ===== SET CALLBACK HELPERS =====
+// Callback format: s_{type}_{action}_{id}
+// type: 'img' (images) or 'pst' (posts)
+function makeSC(type: string, action: string, id?: number): string {
+  return id !== undefined ? `s_${type}_${action}_${id}` : `s_${type}_${action}`;
 }
 
 function setupHandlers(bot: TelegramBot) {
@@ -50,7 +77,7 @@ function setupHandlers(bot: TelegramBot) {
     const existing = await getUser(chatId);
     if (existing) { await showMainMenu(bot, chatId, existing); return; }
     const newUser = await createUser(chatId, { username: msg.from?.username, firstName: msg.from?.first_name, lastName: msg.from?.last_name });
-    await bot.sendMessage(chatId, `🤖 *Добро пожаловать!*\n\nБот отслеживает посты на Pikabu.\n${newUser.isAdmin ? '👑 *Вы — администратор*\n' : ''}`, { parse_mode: 'Markdown', reply_markup: getReplyKeyboard(newUser.isAdmin) });
+    await bot.sendMessage(chatId, '\u{1F916} *\u0414\u043E\u0431\u0440\u043E \u043F\u043E\u0436\u0430\u043B\u043E\u0432\u0430\u0442\u044C!*\n\n\u0411\u043E\u0442 \u043E\u0442\u0441\u043B\u0435\u0436\u0438\u0432\u0430\u0435\u0442 \u043F\u043E\u0441\u0442\u044B \u043D\u0430 Pikabu.\n\u{1F5BC}\uFE0F \u041A\u0430\u0440\u0442\u0438\u043D\u043A\u0438 \u2014 \u0442\u043E\u043B\u044C\u043A\u043E \u0438\u0437\u043E\u0431\u0440\u0430\u0436\u0435\u043D\u0438\u044F \u043F\u043E \u0442\u0435\u0433\u0430\u043C\n\u{1F4F0} \u041F\u043E\u0441\u0442\u044B \u2014 \u043F\u043E\u043B\u043D\u044B\u0435 \u043F\u043E\u0441\u0442\u044B \u043F\u043E \u0442\u0435\u0433\u0430\u043C' + (newUser.isAdmin ? '\n\u{1F451} *\u0412\u044B \u2014 \u0430\u0434\u043C\u0438\u043D\u0438\u0441\u0442\u0440\u0430\u0442\u043E\u0440*' : ''), { parse_mode: 'Markdown', reply_markup: getReplyKeyboard(newUser.isAdmin) });
   });
 
   bot.onText(/\/menu/, async (msg) => {
@@ -62,19 +89,19 @@ function setupHandlers(bot: TelegramBot) {
     const chatId = msg.chat.id;
     const text = msg.text || '';
     if (text.startsWith('/')) return;
-    
+
     const dialog = await getDialogState(chatId);
     if (dialog) { await handleDialog(bot, chatId, dialog, text); return; }
-    
+
     const user = await getUser(chatId);
     if (!user) return;
-    
-    if (text === '📦 Наборы') await showSetsList(bot, chatId);
-    else if (text === '👤 Авторы') await showAuthorsList(bot, chatId);
-    else if (text === '👥 Сообщества') await showCommunitiesList(bot, chatId);
-    else if (text === '📊 Статистика') await showUserStats(bot, chatId, user);
-    else if (text === '🔐 Аккаунт Pikabu') await showPikabuAccount(bot, chatId, user);
-    else if (text === '⚙️ Админ' && user.isAdmin) await showAdminPanel(bot, chatId);
+
+    if (text === '\u{1F5BC}\uFE0F \u041A\u0430\u0440\u0442\u0438\u043D\u043A\u0438') await showSetsList(bot, chatId, 'images');
+    else if (text === '\u{1F4F0} \u041F\u043E\u0441\u0442\u044B') await showSetsList(bot, chatId, 'posts');
+    else if (text === '\u{1F464} \u0410\u0432\u0442\u043E\u0440\u044B') await showAuthorsList(bot, chatId);
+    else if (text === '\u{1F465} \u0421\u043E\u043E\u0431\u0449\u0435\u0441\u0442\u0432\u0430') await showCommunitiesList(bot, chatId);
+    else if (text === '\u{1F4CA} \u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043A\u0430') await showUserStats(bot, chatId, user);
+    else if (text === '\u2699\uFE0F \u0410\u0434\u043C\u0438\u043D' && user.isAdmin) await showAdminPanel(bot, chatId);
     else if (user.isAdmin && text.startsWith('parse ')) { const tag = text.slice(6); await runParseTest(bot, chatId, tag); }
     else await showMainMenu(bot, chatId, user);
   });
@@ -89,68 +116,65 @@ function setupHandlers(bot: TelegramBot) {
 }
 
 async function showMainMenu(bot: TelegramBot, chatId: number, user: UserData) {
-  await bot.sendMessage(chatId, `🏠 *Главное меню*\n\n📦 Наборов: ${user.tagSets.length}\n👤 Авторов: ${user.authorSubs.length}\n👥 Сообществ: ${user.communitySubs?.length || 0}\n📤 Постов: ${user.postsReceived}`, { parse_mode: 'Markdown', reply_markup: getReplyKeyboard(user.isAdmin || false) });
+  const imgCount = user.tagSets.filter(ts => ts.type === 'images').length;
+  const pstCount = user.tagSets.filter(ts => ts.type === 'posts').length;
+  const text = '\u{1F3E0} *\u0413\u043B\u0430\u0432\u043D\u043E\u0435 \u043C\u0435\u043D\u044E*\n\n\u{1F5BC}\uFE0F \u041D\u0430\u0431\u043E\u0440\u043E\u0432 \u043A\u0430\u0440\u0442\u0438\u043D\u043E\u043A: ' + imgCount + '\n\u{1F4F0} \u041D\u0430\u0431\u043E\u0440\u043E\u0432 \u043F\u043E\u0441\u0442\u043E\u0432: ' + pstCount + '\n\u{1F464} \u0410\u0432\u0442\u043E\u0440\u043E\u0432: ' + user.authorSubs.length + '\n\u{1F465} \u0421\u043E\u043E\u0431\u0449\u0435\u0441\u0442\u0432: ' + (user.communitySubs?.length || 0) + '\n\u{1F4E4} \u041F\u043E\u0441\u0442\u043E\u0432: ' + user.postsReceived;
+  await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: getReplyKeyboard(user.isAdmin || false) });
 }
 
 async function showUserStats(bot: TelegramBot, chatId: number, user: UserData) {
-  const text = user.isAdmin
-    ? `📊 *Статистика*\n\n📦 Наборов: ${user.tagSets.length}\n👤 Авторов: ${user.authorSubs.length}\n👥 Сообществ: ${user.communitySubs?.length || 0}\n📤 Постов получено: ${user.postsReceived}\n🔓 18+ авторизация: ${hasAuthSession() ? '✅' : '❌'}`
-    : `📊 *Ваша статистика*\n\n📦 Наборов: ${user.tagSets.length}\n👤 Авторов: ${user.authorSubs.length}\n👥 Сообществ: ${user.communitySubs?.length || 0}\n📤 Постов: ${user.postsReceived}`;
+  const imgCount = user.tagSets.filter(ts => ts.type === 'images').length;
+  const pstCount = user.tagSets.filter(ts => ts.type === 'posts').length;
+  const text = '\u{1F4CA} *\u0412\u0430\u0448\u0430 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043A\u0430*\n\n\u{1F5BC}\uFE0F \u041D\u0430\u0431\u043E\u0440\u043E\u0432 \u043A\u0430\u0440\u0442\u0438\u043D\u043E\u043A: ' + imgCount + '\n\u{1F4F0} \u041D\u0430\u0431\u043E\u0440\u043E\u0432 \u043F\u043E\u0441\u0442\u043E\u0432: ' + pstCount + '\n\u{1F464} \u0410\u0432\u0442\u043E\u0440\u043E\u0432: ' + user.authorSubs.length + '\n\u{1F465} \u0421\u043E\u043E\u0431\u0449\u0435\u0441\u0442\u0432: ' + (user.communitySubs?.length || 0) + '\n\u{1F4E4} \u041F\u043E\u0441\u0442\u043E\u0432: ' + user.postsReceived;
   await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: getReplyKeyboard(user.isAdmin) });
 }
 
-async function showPikabuAccount(bot: TelegramBot, chatId: number, user: UserData) {
-  const creds = await getPikabuCredentials(chatId);
-  let text: string;
-  let btns: TelegramBot.InlineKeyboardButton[][];
-  if (creds) {
-    text = `🔐 *Аккаунт Pikabu*\n\n👤 Логин: ${creds.username}\n📊 Статус: ${creds.isActive ? '✅ Активен' : '⏸ Отключён'}\n🔓 18+ контент: ${creds.isActive ? '✅ Доступен' : '❌ Нет'}`;
-    btns = [[{ text: '🔄 Заменить cookies', callback_data: 'pikabu_replace' }], [{ text: creds.isActive ? '⏸ Отключить' : '▶️ Включить', callback_data: 'pikabu_toggle' }], [{ text: '🗑 Удалить', callback_data: 'pikabu_delete' }]];
-  } else {
-    text = `🔐 *Аккаунт Pikabu*\n\n❌ Аккаунт не привязан\n\n💡 *Инструкция:*\n1. Откройте pikabu.ru и войдите\n2. Нажмите *F12* → вкладка *Console*\n3. Вставьте: \`copy(document.cookie)\`\n4. Нажмите Enter — cookies скопируются\n5. Вставьте их здесь`;
-    btns = [[{ text: '➕ Добавить cookies', callback_data: 'pikabu_add' }]];
-  }
-  await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-}
-
-// ===== НАБОРЫ ТЕГОВ =====
-async function showSetsList(bot: TelegramBot, chatId: number) {
+// ===== TAG SETS (images + posts) =====
+async function showSetsList(bot: TelegramBot, chatId: number, setType: 'images' | 'posts') {
   const user = await getUser(chatId);
   if (!user) return;
-  if (user.tagSets.length === 0) {
-    await bot.sendMessage(chatId, '📭 *Нет наборов*', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '➕ Создать', callback_data: 'create_set' }]] } });
+  const sets = user.tagSets.filter(ts => ts.type === setType);
+  const isImg = setType === 'images';
+  const title = isImg ? '\u{1F5BC}\uFE0F *\u041D\u0430\u0431\u043E\u0440\u044B \u043A\u0430\u0440\u0442\u0438\u043D\u043E\u043A:*' : '\u{1F4F0} *\u041D\u0430\u0431\u043E\u0440\u044B \u043F\u043E\u0441\u0442\u043E\u0432:*';
+  const prefix = isImg ? 'img' : 'pst';
+
+  if (sets.length === 0) {
+    await bot.sendMessage(chatId, '\u{1F4ED} *\u041D\u0435\u0442 \u043D\u0430\u0431\u043E\u0440\u043E\u0432*', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '\u2795 \u0421\u043E\u0437\u0434\u0430\u0442\u044C', callback_data: makeSC(prefix, 'create') }]] } });
     return;
   }
-  const btns = user.tagSets.map(ts => [{ text: `${ts.isActive ? '✅' : '⏸'} ${ts.name}`, callback_data: `set_${ts.id}` }]);
-  btns.push([{ text: '➕ Создать', callback_data: 'create_set' }]);
-  await bot.sendMessage(chatId, '📦 *Наборы тегов:*', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+  const btns = sets.map(ts => [{ text: (ts.isActive ? '\u2705' : '\u23F8') + ' ' + ts.name, callback_data: makeSC(prefix, 'det', ts.id) }]);
+  btns.push([{ text: '\u2795 \u0421\u043E\u0437\u0434\u0430\u0442\u044C', callback_data: makeSC(prefix, 'create') }]);
+  await bot.sendMessage(chatId, title, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
 }
 
-async function showSetDetails(bot: TelegramBot, chatId: number, setId: number, msgId?: number) {
+async function showSetDetails(bot: TelegramBot, chatId: number, setId: number, setType: 'images' | 'posts', msgId?: number) {
   const ts = await getTagSet(setId);
   if (!ts) return;
-  const text = `📦 *${ts.name}*\n\n✅ Теги: ${ts.includeTags.map(t => '#' + t).join(' ') || '—'}\n🚫 Исключения: ${ts.excludeTags.map(t => '#' + t).join(' ') || '—'}`;
+  const prefix = ts.type === 'images' ? 'img' : 'pst';
+  const typeIcon = ts.type === 'images' ? '\u{1F5BC}\uFE0F' : '\u{1F4F0}';
+  const text = typeIcon + ' *' + ts.name + '*\n\n\u2705 \u0422\u0435\u0433\u0438: ' + (ts.includeTags.map(t => '#' + t).join(' ') || '\u2014') + '\n\u{1F6AB} \u0418\u0441\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u044F: ' + (ts.excludeTags.map(t => '#' + t).join(' ') || '\u2014');
   const btns: TelegramBot.InlineKeyboardButton[][] = [
-    [{ text: ts.isActive ? '⏸ Выкл' : '▶️ Вкл', callback_data: `tgl_${setId}` }],
-    [{ text: '✅ +Тег', callback_data: `addi_${setId}` }, { text: '🚫 +Исключ.', callback_data: `adde_${setId}` }],
-    [{ text: '➖ Тег', callback_data: `remi_${setId}` }, { text: '➖ Исключ.', callback_data: `reme_${setId}` }],
-    [{ text: '🗑 Удалить', callback_data: `del_${setId}` }],
+    [{ text: ts.isActive ? '\u23F8 \u0412\u044B\u043A\u043B' : '\u25B6\uFE0F \u0412\u043A\u043B', callback_data: makeSC(prefix, 'tgl', ts.id) }],
+    [{ text: '\u2705 +\u0422\u0435\u0433', callback_data: makeSC(prefix, 'addi', ts.id) }, { text: '\u{1F6AB} +\u0418\u0441\u043A\u043B.', callback_data: makeSC(prefix, 'adde', ts.id) }],
+    [{ text: '\u2796 \u0422\u0435\u0433', callback_data: makeSC(prefix, 'remi', ts.id) }, { text: '\u2796 \u0418\u0441\u043A\u043B.', callback_data: makeSC(prefix, 'reme', ts.id) }],
+    [{ text: '\u{1F5D1} \u0423\u0434\u0430\u043B\u0438\u0442\u044C', callback_data: makeSC(prefix, 'del', ts.id) }],
+    [{ text: '\u25C0\uFE0F \u041D\u0430\u0437\u0430\u0434', callback_data: makeSC(prefix, 'back') }],
   ];
   try { await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } }); }
   catch { await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } }); }
 }
 
-// ===== АВТОРЫ =====
+// ===== \u0410\u0412\u0422\u041E\u0420\u042B =====
 async function showAuthorsList(bot: TelegramBot, chatId: number) {
   const user = await getUser(chatId);
   if (!user) return;
   if (user.authorSubs.length === 0) {
-    await bot.sendMessage(chatId, '📭 *Нет подписок*', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '➕ Добавить', callback_data: 'add_author' }]] } });
+    await bot.sendMessage(chatId, '\u{1F4ED} *\u041D\u0435\u0442 \u043F\u043E\u0434\u043F\u0438\u0441\u043E\u043A*', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '\u2795 \u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C', callback_data: 'add_author' }]] } });
     return;
   }
-  const btns = user.authorSubs.map(s => [{ text: `${s.isActive ? '✅' : '⏸'} @${s.authorUsername}`, callback_data: `auth_${s.id}` }]);
-  btns.push([{ text: '➕ Добавить', callback_data: 'add_author' }]);
-  await bot.sendMessage(chatId, '👤 *Подписки на авторов:*', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+  const btns = user.authorSubs.map(s => [{ text: (s.isActive ? '\u2705' : '\u23F8') + ' @' + s.authorUsername, callback_data: 'auth_' + s.id }]);
+  btns.push([{ text: '\u2795 \u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C', callback_data: 'add_author' }]);
+  await bot.sendMessage(chatId, '\u{1F464} *\u041F\u043E\u0434\u043F\u0438\u0441\u043A\u0438 \u043D\u0430 \u0430\u0432\u0442\u043E\u0440\u043E\u0432:*', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
 }
 
 async function showAuthorDetails(bot: TelegramBot, chatId: number, subId: number, msgId?: number) {
@@ -158,28 +182,27 @@ async function showAuthorDetails(bot: TelegramBot, chatId: number, subId: number
   if (!user) return;
   const as = user.authorSubs.find(s => s.id === subId);
   if (!as) return;
-  const text = `👤 *@${as.authorUsername}*\n\n✅ Активна: ${as.isActive ? 'Да' : 'Нет'}\n🖼 Превью: ${as.sendPreview ? 'Да' : 'Нет'}`;
+  const text = '\u{1F464} *@' + as.authorUsername + '*\n\n\u2705 \u0410\u043A\u0442\u0438\u0432\u043D\u0430: ' + (as.isActive ? '\u0414\u0430' : '\u041D\u0435\u0442');
   const btns: TelegramBot.InlineKeyboardButton[][] = [
-    [{ text: as.isActive ? '⏸ Выкл' : '▶️ Вкл', callback_data: `atgl_${subId}` }],
-    [{ text: as.sendPreview ? '🖼 Превью: вкл' : '🖼 Превью: выкл', callback_data: `aprv_${subId}` }],
-    [{ text: '🗑 Удалить', callback_data: `adel_${subId}` }],
-    [{ text: '◀️ Назад', callback_data: 'back_authors' }],
+    [{ text: as.isActive ? '\u23F8 \u0412\u044B\u043A\u043B' : '\u25B6\uFE0F \u0412\u043A\u043B', callback_data: 'atgl_' + subId }],
+    [{ text: '\u{1F5D1} \u0423\u0434\u0430\u043B\u0438\u0442\u044C', callback_data: 'adel_' + subId }],
+    [{ text: '\u25C0\uFE0F \u041D\u0430\u0437\u0430\u0434', callback_data: 'back_authors' }],
   ];
   try { await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } }); }
   catch { await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } }); }
 }
 
-// ===== СООБЩЕСТВА =====
+// ===== \u0421\u041E\u041E\u0411\u0429\u0415\u0421\u0422\u0412\u0410 =====
 async function showCommunitiesList(bot: TelegramBot, chatId: number) {
   const user = await getUser(chatId);
   if (!user) return;
   if (!user.communitySubs || user.communitySubs.length === 0) {
-    await bot.sendMessage(chatId, '📭 *Нет подписок*', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '➕ Добавить', callback_data: 'add_community' }]] } });
+    await bot.sendMessage(chatId, '\u{1F4ED} *\u041D\u0435\u0442 \u043F\u043E\u0434\u043F\u0438\u0441\u043E\u043A*', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '\u2795 \u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C', callback_data: 'add_community' }]] } });
     return;
   }
-  const btns = user.communitySubs.map(s => [{ text: `${s.isActive ? '✅' : '⏸'} ${s.communityTitle || s.communityName}`, callback_data: `comm_${s.id}` }]);
-  btns.push([{ text: '➕ Добавить', callback_data: 'add_community' }]);
-  await bot.sendMessage(chatId, '👥 *Подписки на сообщества:*', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+  const btns = user.communitySubs.map(s => [{ text: (s.isActive ? '\u2705' : '\u23F8') + ' ' + (s.communityTitle || s.communityName), callback_data: 'comm_' + s.id }]);
+  btns.push([{ text: '\u2795 \u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C', callback_data: 'add_community' }]);
+  await bot.sendMessage(chatId, '\u{1F465} *\u041F\u043E\u0434\u043F\u0438\u0441\u043A\u0438 \u043D\u0430 \u0441\u043E\u043E\u0431\u0449\u0435\u0441\u0442\u0432\u0430:*', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
 }
 
 async function showCommunityDetails(bot: TelegramBot, chatId: number, subId: number, msgId?: number) {
@@ -187,100 +210,78 @@ async function showCommunityDetails(bot: TelegramBot, chatId: number, subId: num
   if (!user) return;
   const cs = user.communitySubs?.find(s => s.id === subId);
   if (!cs) return;
-  const text = `👥 *${cs.communityTitle || cs.communityName}*\n\n✅ Активна: ${cs.isActive ? 'Да' : 'Нет'}\n🖼 Превью: ${cs.sendPreview ? 'Да' : 'Нет'}`;
+  const text = '\u{1F465} *' + (cs.communityTitle || cs.communityName) + '*\n\n\u2705 \u0410\u043A\u0442\u0438\u0432\u043D\u0430: ' + (cs.isActive ? '\u0414\u0430' : '\u041D\u0435\u0442');
   const btns: TelegramBot.InlineKeyboardButton[][] = [
-    [{ text: cs.isActive ? '⏸ Выкл' : '▶️ Вкл', callback_data: `ctgl_${subId}` }],
-    [{ text: cs.sendPreview ? '🖼 Превью: вкл' : '🖼 Превью: выкл', callback_data: `cprv_${subId}` }],
-    [{ text: '🗑 Удалить', callback_data: `cdel_${subId}` }],
-    [{ text: '◀️ Назад', callback_data: 'back_communities' }],
+    [{ text: cs.isActive ? '\u23F8 \u0412\u044B\u043A\u043B' : '\u25B6\uFE0F \u0412\u043A\u043B', callback_data: 'ctgl_' + subId }],
+    [{ text: '\u{1F5D1} \u0423\u0434\u0430\u043B\u0438\u0442\u044C', callback_data: 'cdel_' + subId }],
+    [{ text: '\u25C0\uFE0F \u041D\u0430\u0437\u0430\u0434', callback_data: 'back_communities' }],
   ];
   try { await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } }); }
   catch { await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } }); }
 }
 
-// ===== АДМИН =====
+// ===== \u0410\u0414\u041C\u0418\u041D =====
 async function showAdminPanel(bot: TelegramBot, chatId: number) {
   const stats = await getDetailedStats();
-  const text = `⚙️ *Админ-панель*\n\n👥 Пользователей: ${stats.users.total} (активных: ${stats.users.active})\n📦 Наборов: ${stats.tagSets.total}\n📤 Постов: ${stats.posts.totalSent}\n❌ Ошибок: ${stats.parses.errors}`;
-  await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🔄 Парсинг', callback_data: 'adm_parse' }]] } });
+  const text = '\u2699\uFE0F *\u0410\u0434\u043C\u0438\u043D-\u043F\u0430\u043D\u0435\u043B\u044C*\n\n\u{1F465} \u041F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u0435\u0439: ' + stats.users.total + ' (\u0430\u043A\u0442\u0438\u0432\u043D\u044B\u0445: ' + stats.users.active + ')\n\u{1F4E6} \u041D\u0430\u0431\u043E\u0440\u043E\u0432: ' + stats.tagSets.total + '\n\u{1F4E4} \u041F\u043E\u0441\u0442\u043E\u0432: ' + stats.posts.totalSent + '\u274C \u041E\u0448\u0438\u0431\u043E\u043A: ' + stats.parses.errors;
+  await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '\u{1F504} \u041F\u0430\u0440\u0441\u0438\u043D\u0433', callback_data: 'adm_parse' }]] } });
 }
 
-// ===== ДИАЛОГИ =====
+// ===== \u0414\u0418\u0410\u041B\u041E\u0413\u0418 =====
 async function handleDialog(bot: TelegramBot, chatId: number, dialog: { state: string; data: any }, text: string) {
   switch (dialog.state) {
-    case 'new_set':
+    case 'new_set': {
+      const setType = (dialog.data.setType || 'images') as 'images' | 'posts';
       if (text.trim()) {
-        const r = await createTagSet(chatId, text.trim());
-        if (r.tagSet) { await bot.sendMessage(chatId, `✅ Создан "${r.tagSet.name}"`); await showSetDetails(bot, chatId, r.tagSet.id); }
+        const r = await createTagSet(chatId, text.trim(), setType);
+        if (r.tagSet) {
+          await bot.sendMessage(chatId, '\u2705 \u0421\u043E\u0437\u0434\u0430\u043D "' + r.tagSet.name + '"');
+          await showSetDetails(bot, chatId, r.tagSet.id, setType);
+        } else if (r.error) {
+          await bot.sendMessage(chatId, '\u274C ' + r.error);
+        }
       }
       await clearDialogState(chatId);
       break;
+    }
     case 'add_include':
       if (text.trim()) {
         await addIncludeTag(dialog.data.setId, text.trim().toLowerCase());
-        await bot.sendMessage(chatId, `✅ Тег добавлен: #${text.trim().toLowerCase()}`);
-        await showSetDetails(bot, chatId, dialog.data.setId);
+        await bot.sendMessage(chatId, '\u2705 \u0422\u0435\u0433 \u0434\u043E\u0431\u0430\u0432\u043B\u0435\u043D: #' + text.trim().toLowerCase());
+        await showSetDetails(bot, chatId, dialog.data.setId, dialog.data.setType || 'images');
       }
       await clearDialogState(chatId);
       break;
     case 'add_exclude':
       if (text.trim()) {
         await addExcludeTag(dialog.data.setId, text.trim().toLowerCase());
-        await bot.sendMessage(chatId, `✅ Исключение добавлено: #${text.trim().toLowerCase()}`);
-        await showSetDetails(bot, chatId, dialog.data.setId);
+        await bot.sendMessage(chatId, '\u2705 \u0418\u0441\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435 \u0434\u043E\u0431\u0430\u0432\u043B\u0435\u043D\u043E: #' + text.trim().toLowerCase());
+        await showSetDetails(bot, chatId, dialog.data.setId, dialog.data.setType || 'images');
       }
       await clearDialogState(chatId);
       break;
     case 'remove_include': {
       const tag = text.trim().toLowerCase();
       await removeIncludeTag(dialog.data.setId, tag);
-      await bot.sendMessage(chatId, `✅ Тег удалён: #${tag}`);
-      await showSetDetails(bot, chatId, dialog.data.setId);
+      await bot.sendMessage(chatId, '\u2705 \u0422\u0435\u0433 \u0443\u0434\u0430\u043B\u0451\u043D: #' + tag);
+      await showSetDetails(bot, chatId, dialog.data.setId, dialog.data.setType || 'images');
       await clearDialogState(chatId);
       break;
     }
     case 'remove_exclude': {
       const tag = text.trim().toLowerCase();
       await removeExcludeTag(dialog.data.setId, tag);
-      await bot.sendMessage(chatId, `✅ Исключение удалено: #${tag}`);
-      await showSetDetails(bot, chatId, dialog.data.setId);
+      await bot.sendMessage(chatId, '\u2705 \u0418\u0441\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435 \u0443\u0434\u0430\u043B\u0435\u043D\u043E: #' + tag);
+      await showSetDetails(bot, chatId, dialog.data.setId, dialog.data.setType || 'images');
       await clearDialogState(chatId);
       break;
     }
     case 'add_author':
-      if (text.trim()) { await addAuthorSubscription(chatId, text.trim().replace('@', '')); await bot.sendMessage(chatId, `✅ Подписка на @${text.trim().replace('@', '')}`); await showAuthorsList(bot, chatId); }
+      if (text.trim()) { await addAuthorSubscription(chatId, text.trim().replace('@', '')); await bot.sendMessage(chatId, '\u2705 \u041F\u043E\u0434\u043F\u0438\u0441\u043A\u0430 \u043D\u0430 @' + text.trim().replace('@', '')); await showAuthorsList(bot, chatId); }
       await clearDialogState(chatId);
       break;
     case 'add_community':
-      if (text.trim()) { await addCommunitySubscription(chatId, text.trim().replace('@', '')); await bot.sendMessage(chatId, `✅ Подписка на сообщество @${text.trim().replace('@', '')}`); await showCommunitiesList(bot, chatId); }
-      await clearDialogState(chatId);
-      break;
-    case 'pikabu_login':
-      if (text.trim()) {
-        await setDialogState(chatId, 'pikabu_cookies', { username: text.trim() });
-        await bot.sendMessage(chatId, '🍪 Вставьте cookies из браузера:\n\n1. Откройте pikabu.ru и войдите\n2. Нажмите *F12* → *Console*\n3. Вставьте: \`copy(document.cookie)\`\n4. Нажмите Enter — cookies скопируются', { reply_markup: { inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'pikabu_cancel' }]] } });
-      } else { await bot.sendMessage(chatId, '❌ Логин не может быть пустым'); await clearDialogState(chatId); }
-      break;
-    case 'pikabu_cookies':
-      if (text.trim()) {
-        await bot.sendMessage(chatId, '🔄 Сохранение...');
-        const result = await setPikabuCredentials(chatId, dialog.data.username, text.trim());
-        if (result.success) {
-          setAuthSession(dialog.data.username, text.trim());
-          await bot.sendMessage(chatId, `✅ *Аккаунт привязан!*\n\n👤 Логин: ${dialog.data.username}\n🔓 18+ контент: доступен`, { parse_mode: 'Markdown', reply_markup: getReplyKeyboard((await getUser(chatId))?.isAdmin || false) });
-        } else { await bot.sendMessage(chatId, `❌ Ошибка: ${result.error}`); }
-      } else { await bot.sendMessage(chatId, '❌ Cookies не могут быть пустыми'); }
-      await clearDialogState(chatId);
-      break;
-    case 'pikabu_replace_cookies':
-      if (text.trim()) {
-        await bot.sendMessage(chatId, '🔄 Обновление cookies...');
-        const result = await setPikabuCredentials(chatId, dialog.data.username, text.trim());
-        if (result.success) {
-          setAuthSession(dialog.data.username, text.trim());
-          await bot.sendMessage(chatId, `✅ *Cookies успешно обновлены!*\n\n👤 Логин: ${dialog.data.username}\n🔓 18+ контент: доступен`, { parse_mode: 'Markdown', reply_markup: getReplyKeyboard((await getUser(chatId))?.isAdmin || false) });
-        } else { await bot.sendMessage(chatId, `❌ Ошибка: ${result.error}`); }
-      } else { await bot.sendMessage(chatId, '❌ Cookies не могут быть пустыми'); }
+      if (text.trim()) { await addCommunitySubscription(chatId, text.trim().replace('@', '')); await bot.sendMessage(chatId, '\u2705 \u041F\u043E\u0434\u043F\u0438\u0441\u043A\u0430 \u043D\u0430 \u0441\u043E\u043E\u0431\u0449\u0435\u0441\u0442\u0432\u043E @' + text.trim().replace('@', '')); await showCommunitiesList(bot, chatId); }
       await clearDialogState(chatId);
       break;
     default: await clearDialogState(chatId);
@@ -292,56 +293,55 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
   const user = await getUser(chatId);
   if (!user) return;
 
-  // Tag Sets
-  if (data === 'create_set') { await setDialogState(chatId, 'new_set', {}); await bot.editMessageText('📝 Название набора:', { chat_id: chatId, message_id: msgId }); return; }
-  if (data.startsWith('set_')) { await showSetDetails(bot, chatId, parseInt(data.split('_')[1]), msgId); return; }
-  if (data.startsWith('tgl_')) { const ts = await getTagSet(parseInt(data.split('_')[1])); if (ts) await updateTagSet(ts.id, { isActive: !ts.isActive }); await showSetDetails(bot, chatId, parseInt(data.split('_')[1]), msgId); return; }
-  if (data.startsWith('addi_')) { await setDialogState(chatId, 'add_include', { setId: parseInt(data.split('_')[1]) }); await bot.editMessageText('✅ Введите тег:', { chat_id: chatId, message_id: msgId }); return; }
-  if (data.startsWith('adde_')) { await setDialogState(chatId, 'add_exclude', { setId: parseInt(data.split('_')[1]) }); await bot.editMessageText('🚫 Введите тег исключения:', { chat_id: chatId, message_id: msgId }); return; }
-  if (data.startsWith('remi_')) {
-    const ts = await getTagSet(parseInt(data.split('_')[1]));
-    if (ts && ts.includeTags.length > 0) {
-      await setDialogState(chatId, 'remove_include', { setId: ts.id });
-      await bot.editMessageText(`➖ Тег для удаления:\n\n${ts.includeTags.map(t => '#' + t).join(', ')}`, { chat_id: chatId, message_id: msgId });
+  // Image set callbacks (s_img_*)
+  if (data === 's_img_create') { await setDialogState(chatId, 'new_set', { setType: 'images' }); await bot.editMessageText('\u{1F5BC}\uFE0F \u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043D\u0430\u0431\u043E\u0440\u0430:', { chat_id: chatId, message_id: msgId }); return; }
+  if (data === 's_img_back') { await showSetsList(bot, chatId, 'images'); return; }
+
+  // Post set callbacks (s_pst_*)
+  if (data === 's_pst_create') { await setDialogState(chatId, 'new_set', { setType: 'posts' }); await bot.editMessageText('\u{1F4F0} \u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043D\u0430\u0431\u043E\u0440\u0430:', { chat_id: chatId, message_id: msgId }); return; }
+  if (data === 's_pst_back') { await showSetsList(bot, chatId, 'posts'); return; }
+
+  // Generic set callbacks: s_{img|pst}_{action}_{id}
+  const setMatch = data.match(/^s_(img|pst)_(tgl|addi|adde|remi|reme|del|det)_(\d+)$/);
+  if (setMatch) {
+    const setType = setMatch[1] as 'images' | 'posts';
+    const action = setMatch[2];
+    const setId = parseInt(setMatch[3]);
+
+    if (action === 'det') { await showSetDetails(bot, chatId, setId, setType, msgId); return; }
+    if (action === 'tgl') { const ts = await getTagSet(setId); if (ts) await updateTagSet(ts.id, { isActive: !ts.isActive }); await showSetDetails(bot, chatId, setId, setType, msgId); return; }
+    if (action === 'del') { await deleteTagSet(setId); await showSetsList(bot, chatId, setType); return; }
+    if (action === 'addi') { await setDialogState(chatId, 'add_include', { setId, setType }); await bot.editMessageText('\u2705 \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0442\u0435\u0433:', { chat_id: chatId, message_id: msgId }); return; }
+    if (action === 'adde') { await setDialogState(chatId, 'add_exclude', { setId, setType }); await bot.editMessageText('\u{1F6AB} \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0442\u0435\u0433 \u0438\u0441\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u044F:', { chat_id: chatId, message_id: msgId }); return; }
+    if (action === 'remi') {
+      const ts = await getTagSet(setId);
+      if (ts && ts.includeTags.length > 0) {
+        await setDialogState(chatId, 'remove_include', { setId, setType });
+        await bot.editMessageText('\u2796 \u0422\u0435\u0433 \u0434\u043B\u044F \u0443\u0434\u0430\u043B\u0435\u043D\u0438\u044F:\n\n' + ts.includeTags.map(t => '#' + t).join(', '), { chat_id: chatId, message_id: msgId });
+      }
+      return;
     }
-    return;
-  }
-  if (data.startsWith('reme_')) {
-    const ts = await getTagSet(parseInt(data.split('_')[1]));
-    if (ts && ts.excludeTags.length > 0) {
-      await setDialogState(chatId, 'remove_exclude', { setId: ts.id });
-      await bot.editMessageText(`➖ Исключение для удаления:\n\n${ts.excludeTags.map(t => '#' + t).join(', ')}`, { chat_id: chatId, message_id: msgId });
+    if (action === 'reme') {
+      const ts = await getTagSet(setId);
+      if (ts && ts.excludeTags.length > 0) {
+        await setDialogState(chatId, 'remove_exclude', { setId, setType });
+        await bot.editMessageText('\u2796 \u0418\u0441\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435 \u0434\u043B\u044F \u0443\u0434\u0430\u043B\u0435\u043D\u0438\u044F:\n\n' + ts.excludeTags.map(t => '#' + t).join(', '), { chat_id: chatId, message_id: msgId });
+      }
+      return;
     }
-    return;
   }
-  if (data.startsWith('del_')) { await deleteTagSet(parseInt(data.split('_')[1])); await showSetsList(bot, chatId); return; }
 
   // Authors
-  if (data === 'add_author') { await setDialogState(chatId, 'add_author', {}); await bot.editMessageText('👤 Имя автора (без @):', { chat_id: chatId, message_id: msgId }); return; }
+  if (data === 'add_author') { await setDialogState(chatId, 'add_author', {}); await bot.editMessageText('\u{1F464} \u0418\u043C\u044F \u0430\u0432\u0442\u043E\u0440\u0430 (\u0431\u0435\u0437 @):', { chat_id: chatId, message_id: msgId }); return; }
   if (data.startsWith('auth_')) { await showAuthorDetails(bot, chatId, parseInt(data.split('_')[1]), msgId); return; }
   if (data.startsWith('adel_')) { const s = user.authorSubs.find(s => s.id === parseInt(data.split('_')[1])); if (s) await removeAuthorSubscription(chatId, s.authorUsername); await showAuthorsList(bot, chatId); return; }
   if (data.startsWith('atgl_')) { const s = user.authorSubs.find(s => s.id === parseInt(data.split('_')[1])); if (s) await toggleAuthorSubscription(chatId, s.authorUsername); await showAuthorDetails(bot, chatId, parseInt(data.split('_')[1]), msgId); return; }
-  if (data.startsWith('aprv_')) { const s = user.authorSubs.find(s => s.id === parseInt(data.split('_')[1])); if (s) await setAuthorPreviewMode(chatId, s.authorUsername, !s.sendPreview); await showAuthorDetails(bot, chatId, parseInt(data.split('_')[1]), msgId); return; }
 
   // Communities
-  if (data === 'add_community') { await setDialogState(chatId, 'add_community', {}); await bot.editMessageText('👥 Имя сообщества (без @):', { chat_id: chatId, message_id: msgId }); return; }
+  if (data === 'add_community') { await setDialogState(chatId, 'add_community', {}); await bot.editMessageText('\u{1F465} \u0418\u043C\u044F \u0441\u043E\u043E\u0431\u0449\u0435\u0441\u0442\u0432\u0430 (\u0431\u0435\u0437 @):', { chat_id: chatId, message_id: msgId }); return; }
   if (data.startsWith('comm_')) { await showCommunityDetails(bot, chatId, parseInt(data.split('_')[1]), msgId); return; }
   if (data.startsWith('cdel_')) { await removeCommunitySubscription(parseInt(data.split('_')[1])); await showCommunitiesList(bot, chatId); return; }
   if (data.startsWith('ctgl_')) { await toggleCommunitySubscription(parseInt(data.split('_')[1])); await showCommunityDetails(bot, chatId, parseInt(data.split('_')[1]), msgId); return; }
-  if (data.startsWith('cprv_')) { const cs = user.communitySubs?.find(s => s.id === parseInt(data.split('_')[1])); if (cs) await setCommunityPreviewMode(chatId, cs.communityName, !cs.sendPreview); await showCommunityDetails(bot, chatId, parseInt(data.split('_')[1]), msgId); return; }
-
-  // Pikabu account
-  if (data === 'pikabu_cancel') { await clearDialogState(chatId); await bot.deleteMessage(chatId, msgId); return; }
-  if (data === 'pikabu_add') { await setDialogState(chatId, 'pikabu_login', {}); await bot.editMessageText('👤 Введите логин Pikabu:', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'pikabu_cancel' }]] } }); return; }
-  if (data === 'pikabu_replace') {
-    const existingCreds = await getPikabuCredentials(chatId);
-    if (!existingCreds) return;
-    await setDialogState(chatId, 'pikabu_replace_cookies', { username: existingCreds.username });
-    await bot.editMessageText('🔄 *Замена cookies*\n\n👤 Аккаунт: ' + existingCreds.username + '\n\n🍪 Вставьте новые cookies из браузера:\n\n1. Откройте pikabu.ru и войдите\n2. Нажмите *F12* → *Console*\n3. Вставьте: \`copy(document.cookie)\`\n4. Нажмите Enter — cookies скопируются', { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'pikabu_cancel' }]] } });
-    return;
-  }
-  if (data === 'pikabu_toggle') { await togglePikabuCredentials(chatId); await showPikabuAccount(bot, chatId, (await getUser(chatId))!); return; }
-  if (data === 'pikabu_delete') { await deletePikabuCredentials(chatId); await bot.editMessageText('🗑 Аккаунт удалён', { chat_id: chatId, message_id: msgId }); return; }
 
   // Back navigation
   if (data === 'back_authors') { await showAuthorsList(bot, chatId); return; }
@@ -350,9 +350,9 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
   // Admin
   if (!user.isAdmin) return;
   if (data === 'adm_parse') {
-    await bot.editMessageText('🔄 Парсинг...', { chat_id: chatId, message_id: msgId });
+    await bot.editMessageText('\u{1F504} \u041F\u0430\u0440\u0441\u0438\u043D\u0433...', { chat_id: chatId, message_id: msgId });
     const r = await runParsing(bot);
-    await bot.editMessageText(r.error ? `❌ ${r.error}` : `✅ ${r.newPosts} новых, ${r.sent} отправлено`, { chat_id: chatId, message_id: msgId });
+    await bot.editMessageText(r.error ? '\u274C ' + r.error : '\u2705 ' + r.newPosts + ' \u043D\u043E\u0432\u044B\u0445, ' + r.sent + ' \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E', { chat_id: chatId, message_id: msgId });
     return;
   }
 }
@@ -364,33 +364,13 @@ function setupAutoParsing() {
   console.log('[Bot] Auto parsing: 10 min interval');
 }
 
-// ===== FULL PARSING CYCLE (tags + authors + communities) =====
+// ===== FULL PARSING CYCLE =====
 async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: number; error?: string }> {
   console.log('[Parser] Starting parse cycle...');
 
   const users = await getAllActiveUsers();
   if (users.length === 0) return { newPosts: 0, sent: 0 };
-  console.log(`[Parser] Processing ${users.length} users`);
-
-  // Restore auth session from saved credentials
-  const creds = await getPikabuCredentials(0);
-  if (creds && creds.isActive) {
-    setAuthSession(creds.username, creds.cookies);
-    console.log(`[Parser] Using auth session for ${creds.username}`);
-  }
-
-  // Check if cookies are valid, warn admin if expired
-  const cookieStatus = areCookiesValid();
-  if (creds && creds.isActive && cookieStatus === false) {
-    console.log('[Parser] ⚠️ Cookies expired, notifying admin...');
-    for (const user of users) {
-      if (user.isAdmin) {
-        try {
-          await bot.sendMessage(user.chatId, '⚠️ *Cookies Pikabu протухли!*\n\n18+ контент НЕ отображается.\n\nДля исправления:\n1. Откройте pikabu.ru и войдите\n2. Убедитесь что 18+ включён в настройках\n3. Нажмите *F12* → *Console*\n4. Вставьте: \`copy(document.cookie)\`\n5. Нажмите Enter\n6. В боте: 🔐 Аккаунт Pikabu → 🔄 Заменить cookies', { parse_mode: 'Markdown' });
-        } catch {}
-      }
-    }
-  }
+  console.log('[Parser] Processing ' + users.length + ' users');
 
   // Collect all active tags, authors, communities
   const allTags = new Set<string>();
@@ -411,40 +391,40 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
     }
   }
 
-  console.log(`[Parser] Tags: ${allTags.size}, Authors: ${allAuthors.size}, Communities: ${allCommunities.size}`);
+  console.log('[Parser] Tags: ' + allTags.size + ', Authors: ' + allAuthors.size + ', Communities: ' + allCommunities.size);
 
   let posts: Post[] = [];
 
   // Parse by tags
   if (allTags.size > 0) {
-    console.log(`[Parser] Parsing ${allTags.size} tags...`);
+    console.log('[Parser] Parsing ' + allTags.size + ' tags...');
     const result = await parseMultipleTags([...allTags]);
     posts.push(...result.posts);
-    if (result.errors.length > 0) result.errors.forEach(e => console.error(`[Parser] ${e}`));
-    console.log(`[Parser] Tag posts: ${result.posts.length}`);
+    if (result.errors.length > 0) result.errors.forEach(e => console.error('[Parser] ' + e));
+    console.log('[Parser] Tag posts: ' + result.posts.length);
   }
 
   // Parse by authors
   if (allAuthors.size > 0) {
-    console.log(`[Parser] Parsing ${allAuthors.size} authors...`);
+    console.log('[Parser] Parsing ' + allAuthors.size + ' authors...');
     const result = await parseMultipleAuthors([...allAuthors]);
     posts.push(...result.posts);
-    if (result.errors.length > 0) result.errors.forEach(e => console.error(`[Parser] ${e}`));
-    console.log(`[Parser] Author posts: ${result.posts.length}`);
+    if (result.errors.length > 0) result.errors.forEach(e => console.error('[Parser] ' + e));
+    console.log('[Parser] Author posts: ' + result.posts.length);
   }
 
   // Parse by communities
   if (allCommunities.size > 0) {
-    console.log(`[Parser] Parsing ${allCommunities.size} communities...`);
+    console.log('[Parser] Parsing ' + allCommunities.size + ' communities...');
     const result = await parseMultipleCommunities([...allCommunities]);
     posts.push(...result.posts);
-    if (result.errors.length > 0) result.errors.forEach(e => console.error(`[Parser] ${e}`));
-    console.log(`[Parser] Community posts: ${result.posts.length}`);
+    if (result.errors.length > 0) result.errors.forEach(e => console.error('[Parser] ' + e));
+    console.log('[Parser] Community posts: ' + result.posts.length);
   }
 
   // Dedupe
   posts = Array.from(new Map(posts.map(p => [p.id, p])).values());
-  console.log(`[Parser] Total unique posts: ${posts.length}`);
+  console.log('[Parser] Total unique posts: ' + posts.length);
 
   let newPosts = 0;
   let sent = 0;
@@ -459,143 +439,171 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
       if (user.isBlocked) continue;
       let sentToUser = false;
 
-      // === Check tag sets (fuzzy matching) ===
+      // === 1. IMAGE TAG SETS ===
       for (const ts of user.tagSets) {
-        if (!ts.isActive || ts.includeTags.length === 0) continue;
+        if (ts.type !== 'images' || !ts.isActive) continue;
+        if (!matchTags(post, ts)) continue;
+        if (post.images.length === 0) continue; // Skip posts without images
 
-        // Check exclusions (fuzzy)
-        const hasExclude = ts.excludeTags.some(et =>
-          post.tags.some(pt => pt.toLowerCase().includes(et.toLowerCase()) || et.toLowerCase().includes(pt.toLowerCase()))
-        );
-        if (hasExclude) continue;
-
-        // Check inclusions - ALL include tags must match (AND logic, fuzzy)
-        const hasInclude = ts.includeTags.every(it => {
-          const itLower = it.toLowerCase();
-          return post.tags.some(pt => pt.toLowerCase().includes(itLower) || itLower.includes(pt.toLowerCase()));
-        });
-
-        if (hasInclude) {
-          const alreadySent = await hasUserReceivedPost(user.chatId, String(dbPostId));
-          if (alreadySent) continue;
-          try {
-            await sendFullPost(bot, user.chatId, post, ts.name);
-            await recordUserPost(user.chatId, dbPostId, false);
-            await incrementUserPostsReceived(user.chatId);
-            await incrementGlobalPostsSent();
-            sent++;
-            sentToUser = true;
-            await new Promise(r => setTimeout(r, 300));
-          } catch (e) { console.error('[Bot] Send error:', e); }
-          break;
-        }
+        const alreadySent = await hasUserReceivedPost(user.chatId, post.id);
+        if (alreadySent) continue;
+        try {
+          await sendImagesOnly(bot, user.chatId, post, ts.name);
+          await recordUserPost(user.chatId, dbPostId, false);
+          await incrementUserPostsReceived(user.chatId);
+          await incrementGlobalPostsSent();
+          sent++;
+          sentToUser = true;
+          await new Promise(r => setTimeout(r, 300));
+        } catch (e) { console.error('[Bot] Send error:', e); }
+        break;
       }
 
       if (sentToUser) continue;
 
-      // === Check author subscriptions ===
+      // === 2. POST TAG SETS ===
+      for (const ts of user.tagSets) {
+        if (ts.type !== 'posts' || !ts.isActive) continue;
+        if (!matchTags(post, ts)) continue;
+
+        const alreadySent = await hasUserReceivedPost(user.chatId, post.id);
+        if (alreadySent) continue;
+        try {
+          await sendPostWithSpoiler(bot, user.chatId, post, ts.name);
+          await recordUserPost(user.chatId, dbPostId, false);
+          await incrementUserPostsReceived(user.chatId);
+          await incrementGlobalPostsSent();
+          sent++;
+          sentToUser = true;
+          await new Promise(r => setTimeout(r, 300));
+        } catch (e) { console.error('[Bot] Send error:', e); }
+        break;
+      }
+
+      if (sentToUser) continue;
+
+      // === 3. AUTHOR SUBSCRIPTIONS (full post) ===
       for (const as of user.authorSubs) {
         if (!as.isActive) continue;
-        if (post.author.toLowerCase() === as.authorUsername.toLowerCase()) {
-          const alreadySent = await hasUserReceivedPost(user.chatId, String(dbPostId));
-          if (alreadySent) continue;
-          try {
-            await sendFullPost(bot, user.chatId, post, undefined, `@${as.authorUsername}`);
-            await recordUserPost(user.chatId, dbPostId, as.sendPreview);
-            await incrementUserPostsReceived(user.chatId);
-            await incrementGlobalPostsSent();
-            sent++;
-            sentToUser = true;
-            await new Promise(r => setTimeout(r, 300));
-          } catch (e) { console.error('[Bot] Send error:', e); }
-          break;
-        }
+        if (post.author.toLowerCase() !== as.authorUsername.toLowerCase()) continue;
+
+        const alreadySent = await hasUserReceivedPost(user.chatId, post.id);
+        if (alreadySent) continue;
+        try {
+          await sendPostWithSpoiler(bot, user.chatId, post, undefined, '\u0410\u0432\u0442\u043E\u0440: @' + as.authorUsername);
+          await recordUserPost(user.chatId, dbPostId, as.sendPreview);
+          await incrementUserPostsReceived(user.chatId);
+          await incrementGlobalPostsSent();
+          sent++;
+          sentToUser = true;
+          await new Promise(r => setTimeout(r, 300));
+        } catch (e) { console.error('[Bot] Send error:', e); }
+        break;
       }
 
       if (sentToUser) continue;
 
-      // === Check community subscriptions ===
+      // === 4. COMMUNITY SUBSCRIPTIONS (full post) ===
       if (user.communitySubs) {
         for (const cs of user.communitySubs) {
           if (!cs.isActive) continue;
-          const postHasCommunity = post.link.toLowerCase().includes(`/community/${cs.communityName.toLowerCase()}`) ||
+          const postHasCommunity = post.link.toLowerCase().includes('/community/' + cs.communityName.toLowerCase()) ||
             post.tags.some(t => t.toLowerCase() === cs.communityName.toLowerCase());
-          if (postHasCommunity) {
-            const alreadySent = await hasUserReceivedPost(user.chatId, String(dbPostId));
-            if (alreadySent) continue;
-            try {
-              await sendFullPost(bot, user.chatId, post, undefined, undefined, cs.communityName);
-              await recordUserPost(user.chatId, dbPostId, cs.sendPreview);
-              await incrementUserPostsReceived(user.chatId);
-              await incrementGlobalPostsSent();
-              sent++;
-              await new Promise(r => setTimeout(r, 300));
-            } catch (e) { console.error('[Bot] Send error:', e); }
-            break;
-          }
+          if (!postHasCommunity) continue;
+
+          const alreadySent = await hasUserReceivedPost(user.chatId, post.id);
+          if (alreadySent) continue;
+          try {
+            await sendPostWithSpoiler(bot, user.chatId, post, undefined, undefined, cs.communityTitle || cs.communityName);
+            await recordUserPost(user.chatId, dbPostId, cs.sendPreview);
+            await incrementUserPostsReceived(user.chatId);
+            await incrementGlobalPostsSent();
+            sent++;
+            await new Promise(r => setTimeout(r, 300));
+          } catch (e) { console.error('[Bot] Send error:', e); }
+          break;
         }
       }
     }
   }
 
   await recordParseTime();
-  console.log(`[Parser] Done: ${newPosts} new, ${sent} sent`);
+  console.log('[Parser] Done: ' + newPosts + ' new, ' + sent + ' sent');
   return { newPosts, sent };
 }
 
-// ===== SEND FULL POST (text + images + videos) =====
-async function sendFullPost(bot: TelegramBot, chatId: number, post: Post, setName?: string, authorName?: string, communityName?: string) {
-  let text = '';
-  text += `📌 *${escapeMarkdown(post.title)}*\n`;
-  text += `\n🏷 ${post.tags.slice(0, 5).map(t => '#' + escapeMarkdown(t)).join(' ')}`;
-  text += `\n👤 @${escapeMarkdown(post.author)}`;
-  text += `\n🔗 [Ссылка](${post.link})`;
-  if (setName) text += `\n📦 Набор: ${escapeMarkdown(setName)}`;
-  if (authorName) text += `\n👤 Автор: ${escapeMarkdown(authorName)}`;
-  if (communityName) text += `\n👥 Сообщество: ${escapeMarkdown(communityName)}`;
+// ===== SEND IMAGES ONLY (for image tag sets) =====
+async function sendImagesOnly(bot: TelegramBot, chatId: number, post: Post, setName?: string) {
+  if (post.images.length === 0) return;
 
-  // Body preview
-  if (post.bodyPreview && post.bodyPreview.length > 0) {
-    text += `\n\n📝 ${escapeMarkdown(post.bodyPreview)}${post.bodyPreview.length >= 200 ? '...' : ''}`;
-  }
+  let text = '<b>\u{1F4CC} ' + escapeHtml(post.title) + '</b>';
+  text += '\n\n\u{1F3A8} ' + post.tags.slice(0, 5).map(t => '#' + escapeHtml(t)).join(' ');
+  text += '\n\u{1F464} @' + escapeHtml(post.author);
+  if (setName) text += '\n\u{1F4E6} ' + escapeHtml(setName);
+  text += '\n\n\u{1F517} <a href="' + post.link + '">\u0421\u0441\u044B\u043B\u043A\u0430</a>';
+  if (post.is18plus) text += '\n\u{1F51E} 18+';
 
-  // Videos indicator
-  if (post.videos && post.videos.length > 0) {
-    text += `\n🎬 Видео: ${post.videos.length} шт.`;
-  }
+  await bot.sendMessage(chatId, text, { parse_mode: 'HTML', disable_web_page_preview: true });
 
-  // 18+ marker
-  if (post.is18plus) {
-    text += `\n🔞 18+`;
-  }
-
-  // If no images and no body, just send text
-  if (post.images.length === 0 && (!post.body || post.body.length === 0)) {
-    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', disable_web_page_preview: true });
-    return;
-  }
-
-  // Send text first
-  await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', disable_web_page_preview: true });
-
-  // Send images (up to 10)
   for (const imgUrl of post.images.slice(0, 10)) {
     try {
       await bot.sendPhoto(chatId, imgUrl);
       await new Promise(r => setTimeout(r, 200));
     } catch {
-      // If image fails, send as URL
-      try { await bot.sendMessage(chatId, `🖼 ${imgUrl}`); } catch {}
+      try { await bot.sendMessage(chatId, '\u{1F5BC}\uFE0F ' + imgUrl); } catch {}
+    }
+  }
+}
+
+// ===== SEND FULL POST WITH SPOILER (for post sets, authors, communities) =====
+async function sendPostWithSpoiler(bot: TelegramBot, chatId: number, post: Post, setName?: string, authorLabel?: string, communityLabel?: string) {
+  let text = '<b>\u{1F4CC} ' + escapeHtml(post.title) + '</b>';
+  text += '\n\n\u{1F3A8} ' + post.tags.slice(0, 5).map(t => '#' + escapeHtml(t)).join(' ');
+  text += '\n\u{1F464} @' + escapeHtml(post.author);
+  text += '\n\u{1F517} <a href="' + post.link + '">\u0421\u0441\u044B\u043B\u043A\u0430</a>';
+  if (setName) text += '\n\u{1F4E6} ' + escapeHtml(setName);
+  if (authorLabel) text += '\n\u{1F464} ' + escapeHtml(authorLabel);
+  if (communityLabel) text += '\n\u{1F465} ' + escapeHtml(communityLabel);
+
+  // Body with spoiler for long text
+  const body = post.body || post.bodyPreview || '';
+  if (body.length > 0) {
+    text += '\n\n\u{1F4DD} ';
+    if (body.length > 300) {
+      text += '<tg-spoiler>' + escapeHtml(body) + '</tg-spoiler>';
+    } else {
+      text += escapeHtml(body);
+    }
+  }
+
+  // Videos
+  if (post.videos && post.videos.length > 0) {
+    text += '\n\n\u{1F3AC} \u0412\u0438\u0434\u0435\u043E: ' + post.videos.length + ' \u0448\u0442.';
+  }
+
+  if (post.is18plus) {
+    text += '\n\u{1F51E} 18+';
+  }
+
+  await bot.sendMessage(chatId, text, { parse_mode: 'HTML', disable_web_page_preview: true });
+
+  // Send images
+  for (const imgUrl of post.images.slice(0, 10)) {
+    try {
+      await bot.sendPhoto(chatId, imgUrl);
+      await new Promise(r => setTimeout(r, 200));
+    } catch {
+      try { await bot.sendMessage(chatId, '\u{1F5BC}\uFE0F ' + imgUrl); } catch {}
     }
   }
 }
 
 async function runParseTest(bot: TelegramBot, chatId: number, tag: string) {
-  await bot.sendMessage(chatId, `🔄 Парсинг тега #${tag}...`);
+  await bot.sendMessage(chatId, '\u{1F504} \u041F\u0430\u0440\u0441\u0438\u043D\u0433 \u0442\u0435\u0433\u0430 #' + tag + '...');
   const result = await parsePikabu(tag);
-  if (result.error) { await bot.sendMessage(chatId, `❌ Ошибка: ${result.error}`); return; }
-  await bot.sendMessage(chatId, `✅ Найдено ${result.posts.length} постов`);
+  if (result.error) { await bot.sendMessage(chatId, '\u274C \u041E\u0448\u0438\u0431\u043A\u0430: ' + result.error); return; }
+  await bot.sendMessage(chatId, '\u2705 \u041D\u0430\u0439\u0434\u0435\u043D\u043E ' + result.posts.length + ' \u043F\u043E\u0441\u0442\u043E\u0432');
   for (const post of result.posts.slice(0, 3)) {
-    await sendFullPost(bot, chatId, post);
+    await sendPostWithSpoiler(bot, chatId, post);
   }
 }

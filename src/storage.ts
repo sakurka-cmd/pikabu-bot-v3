@@ -29,6 +29,7 @@ export interface UserData {
 export interface TagSetData {
   id: number;
   name: string;
+  type: 'images' | 'posts';
   isActive: boolean;
   includeTags: string[];
   excludeTags: string[];
@@ -153,6 +154,14 @@ function createTables(): void {
       UNIQUE(userId, name)
     )
   `);
+
+  // Migration: add type column to tagSets
+  try {
+    db.run(`ALTER TABLE tagSets ADD COLUMN type TEXT DEFAULT 'images'`);
+    console.log('[DB] Migration: added type column to tagSets');
+  } catch (e) {
+    // Column already exists
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS authorSubscriptions (
@@ -387,6 +396,7 @@ function mapTagSet(ts: any): TagSetData {
   return {
     id: ts.id,
     name: ts.name,
+    type: (ts.type || 'images') as 'images' | 'posts',
     isActive: !!ts.isActive,
     includeTags: JSON.parse(ts.includeTags || '[]'),
     excludeTags: JSON.parse(ts.excludeTags || '[]'),
@@ -492,7 +502,10 @@ export async function getAllActiveUsers(): Promise<UserData[]> {
     if (user) {
       user.tagSets = user.tagSets.filter(ts => ts.isActive);
       user.authorSubs = user.authorSubs.filter(as => as.isActive);
-      if (user.tagSets.length > 0) {
+      if (user.communitySubs) {
+        user.communitySubs = user.communitySubs.filter(cs => cs.isActive);
+      }
+      if (user.tagSets.length > 0 || user.authorSubs.length > 0 || (user.communitySubs?.length ?? 0) > 0) {
         result.push(user);
       }
     }
@@ -510,7 +523,7 @@ export async function getTagSet(tagSetId: number): Promise<TagSetData | null> {
   return mapTagSet(ts);
 }
 
-export async function createTagSet(chatId: number, name: string): Promise<{ success: boolean; tagSet?: TagSetData; error?: string }> {
+export async function createTagSet(chatId: number, name: string, type: string = 'images'): Promise<{ success: boolean; tagSet?: TagSetData; error?: string }> {
   const settings = await getSettings();
   const user = await getUser(chatId);
 
@@ -524,8 +537,8 @@ export async function createTagSet(chatId: number, name: string): Promise<{ succ
 
   try {
     const result = run(
-      'INSERT INTO tagSets (userId, name) VALUES (?, ?)',
-      [user.id, name.trim().slice(0, 50)]
+      'INSERT INTO tagSets (userId, name, type) VALUES (?, ?, ?)',
+      [user.id, name.trim().slice(0, 50), type]
     );
     saveDatabase();
     return { success: true, tagSet: await getTagSet(result.lastInsertRowId) };

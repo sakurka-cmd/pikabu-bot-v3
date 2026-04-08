@@ -1,6 +1,6 @@
 /**
- * Pikabu Parser - Uses manual cookies or HTTP auth
- * v3.2 - Fixed: cookies for ALL requests, body/videos/publishedAt restored
+ * Pikabu Parser - Simple HTTP parser with windows-1251 support
+ * v3.3 - Removed auth/cookie functionality
  */
 
 import * as cheerio from 'cheerio';
@@ -17,8 +17,6 @@ let lastRequestTime = 0;
 const MIN_REQUEST_INTERVAL = 2000;
 const MAX_REQUEST_INTERVAL = 4000;
 
-let authSession: { login: string; cookies: string; expiresAt: number } | null = null;
-const SESSION_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 function getRandomDelay(): number {
   return MIN_REQUEST_INTERVAL + Math.random() * (MAX_REQUEST_INTERVAL - MIN_REQUEST_INTERVAL);
@@ -34,76 +32,7 @@ async function waitForRateLimit(): Promise<void> {
   lastRequestTime = Date.now();
 }
 
-export async function closeBrowser(): Promise<void> {}
 
-export interface PikabuAuthResult {
-  success: boolean;
-  error?: string;
-  cookies?: string;
-}
-
-export async function loginToPikabu(login: string, password: string): Promise<PikabuAuthResult> {
-  console.log(`[Parser] Setting manual cookies for ${login}...`);
-  if (password.includes('=') && password.includes(';')) {
-    authSession = { login, cookies: password, expiresAt: Date.now() + SESSION_DURATION };
-    console.log(`[Parser] Manual cookies set for ${login}`);
-    return { success: true, cookies: password };
-  }
-  return { success: false, error: 'Введите cookies из браузера вместо пароля' };
-}
-
-export async function getAuthSession(login: string, password: string): Promise<string | null> {
-  if (authSession && authSession.login === login && authSession.expiresAt > Date.now()) {
-    return authSession.cookies;
-  }
-  const result = await loginToPikabu(login, password);
-  return result.success && result.cookies ? result.cookies : null;
-}
-
-export function setAuthSession(login: string, cookies: string): void {
-  authSession = { login, cookies, expiresAt: Date.now() + SESSION_DURATION };
-}
-
-export function clearAuthSession(): void {
-  authSession = null;
-}
-
-export function hasAuthSession(): boolean {
-  return authSession !== null && authSession.expiresAt > Date.now();
-}
-
-// Track cookie validity
-let cookiesValid: boolean | null = null;
-export function areCookiesValid(): boolean | null {
-  return cookiesValid;
-}
-
-// Check if cookies are still working by parsing userID from page config
-function checkCookiesValid(html: string): void {
-  const match = html.match(/"userID"\s*:\s*(\d+)/);
-  if (match) {
-    const userID = parseInt(match[1], 10);
-    if (userID === 0 && authSession) {
-      if (cookiesValid !== false) {
-        console.warn(`[Parser] ⚠️ Cookies EXPIRED! pikabu returns userID=0. 18+ content will NOT be shown.`);
-        console.warn(`[Parser] ℹ️  Please update cookies in the bot (🔐 Аккаунт Pikabu → 🗑 Удалить → ➕ Добавить)`);
-      }
-      cookiesValid = false;
-    } else if (userID > 0) {
-      if (cookiesValid !== true) {
-        console.log(`[Parser] ✅ Cookies valid (userID=${userID})`);
-      }
-      cookiesValid = true;
-    }
-  }
-
-  // Also check isAdultVisible
-  const adultMatch = html.match(/"isAdultVisible"\s*:\s*(\w+)/);
-  if (adultMatch && adultMatch[1] === 'false' && authSession) {
-    console.warn(`[Parser] ⚠️ isAdultVisible=false — 18+ posts are hidden even for logged-in user`);
-    console.warn(`[Parser] ℹ️  Make sure 18+ is enabled in your Pikabu account settings`);
-  }
-}
 
 export interface Post {
   id: string;
@@ -162,12 +91,7 @@ function decodeWindows1251(buffer: ArrayBuffer): string {
 async function fetchPage(url: string): Promise<string> {
   await waitForRateLimit();
   
-  let cookieString = 'is_adult=1; adult_mode=1;';
-  if (authSession) {
-    cookieString = authSession.cookies;
-    if (!authSession.cookies.includes('is_adult')) cookieString += '; is_adult=1';
-    if (!authSession.cookies.includes('adult_mode')) cookieString += '; adult_mode=1';
-  }
+  const cookieString = 'is_adult=1; adult_mode=1';
 
   const response = await fetch(url, {
     headers: {
@@ -184,7 +108,7 @@ async function fetchPage(url: string): Promise<string> {
       throw new Error('HTTP 429: Rate limited');
     }
     if (response.status === 401 || response.status === 403) {
-      if (authSession) console.warn('[Parser] 401/403 - cookies may be expired!');
+      console.warn('[Parser] 401/403 - access denied');
     }
     throw new Error(`HTTP ${response.status}`);
   }
@@ -192,10 +116,6 @@ async function fetchPage(url: string): Promise<string> {
   const buffer = await response.arrayBuffer();
   const html = decodeWindows1251(buffer);
   
-  // Validate cookies on every request (lightweight regex check)
-  if (authSession && (html.includes('"userID"'))) {
-    checkCookiesValid(html);
-  }
   
   return html;
 }
@@ -341,7 +261,6 @@ export async function parseMultipleTags(tags: string[]): Promise<{ posts: Post[]
     const result = await parsePikabu(tag);
     if (result.error) errors.push(`Tag ${tag}: ${result.error}`);
     else allPosts.push(...result.posts);
-    await new Promise(r => setTimeout(r, 2000));
   }
 
   const seen = new Set<string>();
@@ -386,7 +305,6 @@ export async function parseMultipleAuthors(authors: string[]): Promise<{ posts: 
     } catch (e) {
       errors.push(`Author ${author}: ${e instanceof Error ? e.message : 'Error'}`);
     }
-    await new Promise(r => setTimeout(r, 2000));
   }
 
   const seen = new Set<string>();
@@ -432,7 +350,6 @@ export async function parseMultipleCommunities(communities: string[]): Promise<{
     } catch (e) {
       errors.push(`Community ${community}: ${e instanceof Error ? e.message : 'Error'}`);
     }
-    await new Promise(r => setTimeout(r, 2000));
   }
 
   const seen = new Set<string>();
