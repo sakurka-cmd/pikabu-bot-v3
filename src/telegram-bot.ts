@@ -490,7 +490,7 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
         const alreadySent = await hasUserReceivedPost(user.chatId, post.id);
         if (alreadySent) continue;
         try {
-          await sendPostWithSpoiler(bot, user.chatId, post, undefined, '\u0410\u0432\u0442\u043E\u0440: @' + as.authorUsername);
+          await sendPostWithSpoiler(bot, user.chatId, post, undefined, '\u0410\u0432\u0442\u043E\u0440: @' + as.authorUsername, undefined, true);
           await recordUserPost(user.chatId, dbPostId, as.sendPreview);
           await incrementUserPostsReceived(user.chatId);
           await incrementGlobalPostsSent();
@@ -514,7 +514,7 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
           const alreadySent = await hasUserReceivedPost(user.chatId, post.id);
           if (alreadySent) continue;
           try {
-            await sendPostWithSpoiler(bot, user.chatId, post, undefined, undefined, cs.communityTitle || cs.communityName);
+            await sendPostWithSpoiler(bot, user.chatId, post, undefined, undefined, cs.communityTitle || cs.communityName, true);
             await recordUserPost(user.chatId, dbPostId, cs.sendPreview);
             await incrementUserPostsReceived(user.chatId);
             await incrementGlobalPostsSent();
@@ -556,7 +556,7 @@ async function sendImagesOnly(bot: TelegramBot, chatId: number, post: Post, setN
 }
 
 // ===== SEND FULL POST WITH SPOILER (for post sets, authors, communities) =====
-async function sendPostWithSpoiler(bot: TelegramBot, chatId: number, post: Post, setName?: string, authorLabel?: string, communityLabel?: string) {
+async function sendPostWithSpoiler(bot: TelegramBot, chatId: number, post: Post, setName?: string, authorLabel?: string, communityLabel?: string, showLinkPreview: boolean = false) {
   let text = '<b>\u{1F4CC} ' + escapeHtml(post.title) + '</b>';
   text += '\n\n\u{1F3A8} ' + post.tags.slice(0, 5).map(t => '#' + escapeHtml(t)).join(' ');
   text += '\n\u{1F464} @' + escapeHtml(post.author);
@@ -585,7 +585,7 @@ async function sendPostWithSpoiler(bot: TelegramBot, chatId: number, post: Post,
     text += '\n\u{1F51E} 18+';
   }
 
-  await bot.sendMessage(chatId, text, { parse_mode: 'HTML', disable_web_page_preview: true });
+  await bot.sendMessage(chatId, text, { parse_mode: 'HTML', disable_web_page_preview: !showLinkPreview });
 
   // Send images
   for (const imgUrl of post.images.slice(0, 10)) {
