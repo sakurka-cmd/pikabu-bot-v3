@@ -1,19 +1,13 @@
 ~version: "2.0"
 
-# Применять только к страницам с постами Pikabu
 ?exists: //article[@data-story-id]
 
-# Основное тело — контент поста
 body: //div[contains(@class, "story__typography")]
 
-# Заголовок поста
 title: //span[contains(@class, "story__title-link")]
 
-# Автор из data-атрибута
 author_name: //article[@data-story-id]/@data-author-name
 
-# Дата из time[datetime] (ISO 8601)
 date: //time[contains(@class, "story__datetime")]/@datetime
 
-# Обложка — первое изображение поста (бирём data-large-image если есть)
-cover: //img[contains(@class, "story-image")][1]
+cover: //img[@data-large-image][1]

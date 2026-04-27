@@ -182,9 +182,12 @@ async function showAuthorDetails(bot: TelegramBot, chatId: number, subId: number
   if (!user) return;
   const as = user.authorSubs.find(s => s.id === subId);
   if (!as) return;
-  const text = '\u{1F464} *@' + as.authorUsername + '*\n\n\u2705 \u0410\u043A\u0442\u0438\u0432\u043D\u0430: ' + (as.isActive ? '\u0414\u0430' : '\u041D\u0435\u0442');
+  const previewIcon = as.sendPreview ? '\u{1F441}\uFE0F' : '\u{1F4DD}';
+  const previewLabel = as.sendPreview ? '\u041F\u0440\u0435\u0432\u044C\u044E (Instant View)' : '\u041F\u043E\u043B\u043D\u044B\u0439 \u0442\u0435\u043A\u0441\u0442';
+  const text = '\u{1F464} *@' + as.authorUsername + '*\n\n\u2705 \u0410\u043A\u0442\u0438\u0432\u043D\u0430: ' + (as.isActive ? '\u0414\u0430' : '\u041D\u0435\u0442') + '\n' + previewIcon + ' \u0420\u0435\u0436\u0438\u043C: ' + previewLabel;
   const btns: TelegramBot.InlineKeyboardButton[][] = [
     [{ text: as.isActive ? '\u23F8 \u0412\u044B\u043A\u043B' : '\u25B6\uFE0F \u0412\u043A\u043B', callback_data: 'atgl_' + subId }],
+    [{ text: (as.sendPreview ? '\u{1F4DD} \u041F\u043E\u043B\u043D\u044B\u0439 \u0442\u0435\u043A\u0441\u0442' : '\u{1F441}\uFE0F \u041F\u0440\u0435\u0432\u044C\u044E (IV)'), callback_data: 'aprev_' + subId }],
     [{ text: '\u{1F5D1} \u0423\u0434\u0430\u043B\u0438\u0442\u044C', callback_data: 'adel_' + subId }],
     [{ text: '\u25C0\uFE0F \u041D\u0430\u0437\u0430\u0434', callback_data: 'back_authors' }],
   ];
@@ -210,9 +213,12 @@ async function showCommunityDetails(bot: TelegramBot, chatId: number, subId: num
   if (!user) return;
   const cs = user.communitySubs?.find(s => s.id === subId);
   if (!cs) return;
-  const text = '\u{1F465} *' + (cs.communityTitle || cs.communityName) + '*\n\n\u2705 \u0410\u043A\u0442\u0438\u0432\u043D\u0430: ' + (cs.isActive ? '\u0414\u0430' : '\u041D\u0435\u0442');
+  const previewIcon = cs.sendPreview ? '\u{1F441}\uFE0F' : '\u{1F4DD}';
+  const previewLabel = cs.sendPreview ? '\u041F\u0440\u0435\u0432\u044C\u044E (Instant View)' : '\u041F\u043E\u043B\u043D\u044B\u0439 \u0442\u0435\u043A\u0441\u0442';
+  const text = '\u{1F465} *' + (cs.communityTitle || cs.communityName) + '*\n\n\u2705 \u0410\u043A\u0442\u0438\u0432\u043D\u0430: ' + (cs.isActive ? '\u0414\u0430' : '\u041D\u0435\u0442') + '\n' + previewIcon + ' \u0420\u0435\u0436\u0438\u043C: ' + previewLabel;
   const btns: TelegramBot.InlineKeyboardButton[][] = [
     [{ text: cs.isActive ? '\u23F8 \u0412\u044B\u043A\u043B' : '\u25B6\uFE0F \u0412\u043A\u043B', callback_data: 'ctgl_' + subId }],
+    [{ text: (cs.sendPreview ? '\u{1F4DD} \u041F\u043E\u043B\u043D\u044B\u0439 \u0442\u0435\u043A\u0441\u0442' : '\u{1F441}\uFE0F \u041F\u0440\u0435\u0432\u044C\u044E (IV)'), callback_data: 'cprev_' + subId }],
     [{ text: '\u{1F5D1} \u0423\u0434\u0430\u043B\u0438\u0442\u044C', callback_data: 'cdel_' + subId }],
     [{ text: '\u25C0\uFE0F \u041D\u0430\u0437\u0430\u0434', callback_data: 'back_communities' }],
   ];
@@ -336,12 +342,14 @@ async function handleCallback(bot: TelegramBot, chatId: number, data: string, ms
   if (data.startsWith('auth_')) { await showAuthorDetails(bot, chatId, parseInt(data.split('_')[1]), msgId); return; }
   if (data.startsWith('adel_')) { const s = user.authorSubs.find(s => s.id === parseInt(data.split('_')[1])); if (s) await removeAuthorSubscription(chatId, s.authorUsername); await showAuthorsList(bot, chatId); return; }
   if (data.startsWith('atgl_')) { const s = user.authorSubs.find(s => s.id === parseInt(data.split('_')[1])); if (s) await toggleAuthorSubscription(chatId, s.authorUsername); await showAuthorDetails(bot, chatId, parseInt(data.split('_')[1]), msgId); return; }
+  if (data.startsWith('aprev_')) { const s = user.authorSubs.find(s => s.id === parseInt(data.split('_')[1])); if (s) await setAuthorPreviewMode(chatId, s.authorUsername, !s.sendPreview); await showAuthorDetails(bot, chatId, parseInt(data.split('_')[1]), msgId); return; }
 
   // Communities
   if (data === 'add_community') { await setDialogState(chatId, 'add_community', {}); await bot.editMessageText('\u{1F465} \u0418\u043C\u044F \u0441\u043E\u043E\u0431\u0449\u0435\u0441\u0442\u0432\u0430 (\u0431\u0435\u0437 @):', { chat_id: chatId, message_id: msgId }); return; }
   if (data.startsWith('comm_')) { await showCommunityDetails(bot, chatId, parseInt(data.split('_')[1]), msgId); return; }
   if (data.startsWith('cdel_')) { await removeCommunitySubscription(parseInt(data.split('_')[1])); await showCommunitiesList(bot, chatId); return; }
   if (data.startsWith('ctgl_')) { await toggleCommunitySubscription(parseInt(data.split('_')[1])); await showCommunityDetails(bot, chatId, parseInt(data.split('_')[1]), msgId); return; }
+  if (data.startsWith('cprev_')) { const cs = user.communitySubs?.find(s => s.id === parseInt(data.split('_')[1])); if (cs) await setCommunityPreviewMode(chatId, cs.communityName, !cs.sendPreview); await showCommunityDetails(bot, chatId, parseInt(data.split('_')[1]), msgId); return; }
 
   // Back navigation
   if (data === 'back_authors') { await showAuthorsList(bot, chatId); return; }
@@ -482,7 +490,7 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
 
       if (sentToUser) continue;
 
-      // === 3. AUTHOR SUBSCRIPTIONS (full post) ===
+      // === 3. AUTHOR SUBSCRIPTIONS (preview or full post) ===
       for (const as of user.authorSubs) {
         if (!as.isActive) continue;
         if (post.author.toLowerCase() !== as.authorUsername.toLowerCase()) continue;
@@ -490,7 +498,11 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
         const alreadySent = await hasUserReceivedPost(user.chatId, post.id);
         if (alreadySent) continue;
         try {
-          await sendPostWithSpoiler(bot, user.chatId, post, undefined, '\u0410\u0432\u0442\u043E\u0440: @' + as.authorUsername, undefined, true);
+          if (as.sendPreview) {
+            await sendPostPreview(bot, user.chatId, post, '\u0410\u0432\u0442\u043E\u0440: @' + as.authorUsername);
+          } else {
+            await sendPostWithSpoiler(bot, user.chatId, post, undefined, '\u0410\u0432\u0442\u043E\u0440: @' + as.authorUsername);
+          }
           await recordUserPost(user.chatId, dbPostId, as.sendPreview);
           await incrementUserPostsReceived(user.chatId);
           await incrementGlobalPostsSent();
@@ -503,7 +515,7 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
 
       if (sentToUser) continue;
 
-      // === 4. COMMUNITY SUBSCRIPTIONS (full post) ===
+      // === 4. COMMUNITY SUBSCRIPTIONS (preview or full post) ===
       if (user.communitySubs) {
         for (const cs of user.communitySubs) {
           if (!cs.isActive) continue;
@@ -514,7 +526,11 @@ async function runParsing(bot: TelegramBot): Promise<{ newPosts: number; sent: n
           const alreadySent = await hasUserReceivedPost(user.chatId, post.id);
           if (alreadySent) continue;
           try {
-            await sendPostWithSpoiler(bot, user.chatId, post, undefined, undefined, cs.communityTitle || cs.communityName, true);
+            if (cs.sendPreview) {
+              await sendPostPreview(bot, user.chatId, post, undefined, cs.communityTitle || cs.communityName);
+            } else {
+              await sendPostWithSpoiler(bot, user.chatId, post, undefined, undefined, cs.communityTitle || cs.communityName);
+            }
             await recordUserPost(user.chatId, dbPostId, cs.sendPreview);
             await incrementUserPostsReceived(user.chatId);
             await incrementGlobalPostsSent();
@@ -553,6 +569,23 @@ async function sendImagesOnly(bot: TelegramBot, chatId: number, post: Post, setN
       try { await bot.sendMessage(chatId, '\u{1F5BC}\uFE0F ' + imgUrl); } catch {}
     }
   }
+}
+
+// ===== SEND POST PREVIEW (Instant View mode) =====
+async function sendPostPreview(bot: TelegramBot, chatId: number, post: Post, authorLabel?: string, communityLabel?: string) {
+  let text = '<b>' + escapeHtml(post.title) + '</b>';
+  text += '\n\n';
+  text += escapeHtml(post.bodyPreview || post.body || '').slice(0, 200);
+  if ((post.body || post.bodyPreview || '').length > 200) text += '...';
+  text += '\n\n\u{1F3A8} ' + post.tags.slice(0, 5).map(t => '#' + escapeHtml(t)).join(' ');
+  text += '\n\u{1F464} @' + escapeHtml(post.author);
+  if (authorLabel) text += '\n' + escapeHtml(authorLabel);
+  if (communityLabel) text += '\n' + escapeHtml(communityLabel);
+  text += '\n\u{1F517} <a href="' + post.link + '">\u041E\u0442\u043A\u0440\u044B\u0442\u044C \u043F\u043E\u0441\u0442</a>';
+  if (post.is18plus) text += '\n\u{1F51E} 18+';
+
+  // disable_web_page_preview: false — чтобы Telegram показал Instant View
+  await bot.sendMessage(chatId, text, { parse_mode: 'HTML', disable_web_page_preview: false });
 }
 
 // ===== SEND FULL POST WITH SPOILER (for post sets, authors, communities) =====
