@@ -10,7 +10,7 @@
   "dependencies": {
     "cheerio": "^1.2.0",
     "node-telegram-bot-api": "^0.67.0",
-    "socks-proxy-agent": "^2.1.0",
+    "socks-proxy-agent": "^10.0.0",
     "sql.js": "^1.10.3"
   },
   "devDependencies": {
