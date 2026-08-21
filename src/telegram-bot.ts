@@ -1,5 +1,5 @@
 import TelegramBot from 'node-telegram-bot-api';
-import { SocksProxyAgent } from 'socks-proxy-agent';
+import HttpsProxyAgent from 'https-proxy-agent';
 import {
   getSettings, getUser, createUser, updateUser, deleteUser, getAllActiveUsers,
   getTagSet, createTagSet, updateTagSet, deleteTagSet,
@@ -22,8 +22,8 @@ export async function initBot(): Promise<TelegramBot | null> {
   const settings = await getSettings();
   if (!settings.botToken) return null;
   if (botInstance) return botInstance;
-  const proxy = process.env.BOT_PROXY;
-  const agent = proxy ? new SocksProxyAgent(proxy) : undefined;
+  const proxy = process.env.HTTPS_PROXY || process.env.BOT_PROXY;
+  const agent = proxy ? new HttpsProxyAgent(proxy) : undefined;
   console.log('[Bot] Proxy:', proxy || 'none');
   botInstance = new TelegramBot(settings.botToken, { polling: true, request: agent ? { agent } : undefined });
   setupHandlers(botInstance);
